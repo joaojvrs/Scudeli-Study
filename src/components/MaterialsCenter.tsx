@@ -1,15 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  FileText,
-  Upload,
-  Search,
-  File,
-  Image as ImageIcon,
-  Brain,
+import { 
+  FileText, 
+  Upload, 
+  Search, 
+  Plus, 
+  MoreVertical, 
+  File, 
+  Image as ImageIcon, 
+  Brain, 
   FileSearch,
   Trash2,
   Tag,
+  Highlighter,
   ChevronRight,
   Loader2,
   BrainCircuit,
@@ -17,12 +20,12 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
-import { Material } from '../types';
+import { Material, GlobalTag } from '../types';
 import { geminiService } from '../services/geminiService';
 import TagPicker from './TagPicker';
 
 const MaterialsCenter = () => {
-  const { session, subjects, materials } = useAppContext();
+  const { supabaseUser, subjects, tags: globalTags, materials } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTags, setFilterTags] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -30,23 +33,26 @@ const MaterialsCenter = () => {
   const [processingAI, setProcessingAI] = useState(false);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
 
+
   const handleSimulateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.[0] || !session) return;
+    if (!e.target.files?.[0] || !supabaseUser) return;
     const file = e.target.files[0];
     setIsUploading(true);
 
     setTimeout(async () => {
       try {
-        const { error } = await supabase.from('materials').insert({
-          user_id: session.user.id,
+        await supabase.from('materials').insert({
+          user_id: supabaseUser.id,
           title: file.name,
           type: file.type.includes('pdf') ? 'pdf' : file.type.includes('image') ? 'image' : 'docx',
           url: 'https://example.com/simulated-file.pdf',
           subject_id: subjects[0]?.id || 'general',
+          created_at: new Date().toISOString(),
           tags: [],
-          summary: '',
+          summary: ''
         });
-        if (error) handleSupabaseError(error, OperationType.CREATE, 'materials');
+      } catch (e) {
+        handleSupabaseError(e, OperationType.CREATE, 'materials');
       } finally {
         setIsUploading(false);
       }
@@ -56,8 +62,9 @@ const MaterialsCenter = () => {
   const handleProcessAI = async (material: Material) => {
     setProcessingAI(true);
     try {
+      // Simulate reading file content
       const simulatedContent = `Este documento trata sobre ${material.title}. Os principais conceitos envolvem fisiopatologia aplicada ao contexto clínico médico.`;
-
+      
       const summary = await geminiService.summarizeMaterial(simulatedContent);
       const flashcards = await geminiService.generateFlashcardsFromContent(simulatedContent);
       const questions = await geminiService.generateQuestions(
@@ -67,30 +74,35 @@ const MaterialsCenter = () => {
         3
       );
 
+      // Update material with summary
       await supabase.from('materials').update({ summary }).eq('id', material.id);
       setSelectedMaterial({ ...material, summary });
 
+      // Create flashcards
       for (const card of flashcards) {
         await supabase.from('flashcards').insert({
           ...card,
-          user_id: session?.user.id,
+          user_id: supabaseUser?.id,
           subject_id: material.subject_id,
           next_review: new Date().toISOString(),
           interval: 1,
           easiness: 2.5,
           repetitions: 0,
-          tags: ['ia-generated', 'material-sync', material.title],
+          created_at: new Date().toISOString(),
+          tags: ['ia-generated', 'material-sync', material.title]
         });
       }
 
+      // Create questions
       for (const q of questions) {
         await supabase.from('questions').insert({
           ...q,
-          user_id: session?.user.id,
+          user_id: supabaseUser?.id,
           subject_id: material.subject_id,
           difficulty: 'medium',
+          created_at: new Date().toISOString(),
           source: 'ai',
-          tags: ['ia-generated', 'material-sync', material.title],
+          tags: ['ia-generated', 'material-sync', material.title]
         });
       }
 
@@ -107,7 +119,7 @@ const MaterialsCenter = () => {
     setGeneratingQuestions(true);
     try {
       const simulatedContent = `Este documento trata sobre ${material.title}. Os principais conceitos envolvem fisiopatologia aplicada ao contexto clínico médico.`;
-      const questions = await geminiService.generateQuestions(
+      const sessions = await geminiService.generateQuestions(
         subjects.find(s => s.id === material.subject_id)?.name || 'Medicina',
         material.title,
         'medium',
@@ -117,12 +129,13 @@ const MaterialsCenter = () => {
       for (const q of questions) {
         await supabase.from('questions').insert({
           ...q,
-          user_id: session?.user.id,
+          user_id: supabaseUser?.id,
           subject_id: material.subject_id,
           material_id: material.id,
           difficulty: 'medium',
+          created_at: new Date().toISOString(),
           source: 'ai',
-          tags: ['document-based', material.title],
+          tags: ['document-based', material.title]
         });
       }
       alert('5 questões geradas a partir do documento!');
@@ -132,12 +145,6 @@ const MaterialsCenter = () => {
     } finally {
       setGeneratingQuestions(false);
     }
-  };
-
-  const deleteMaterial = async (id: string) => {
-    const { error } = await supabase.from('materials').delete().eq('id', id);
-    if (error) handleSupabaseError(error, OperationType.DELETE, `materials/${id}`);
-    else setSelectedMaterial(null);
   };
 
   const filteredMaterials = materials.filter(m => {
@@ -153,19 +160,19 @@ const MaterialsCenter = () => {
           <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Centro de Materiais</h1>
           <p className="text-gray-500 text-sm">Gerencie PDFs e utilize IA para processar seu conhecimento.</p>
         </div>
-
+        
         <div className="flex items-center space-x-4">
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <input
-              type="text"
+            <input 
+              type="text" 
               placeholder="Buscar documentos..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-12 pr-6 py-3 bg-gray-50 border border-gray-100 rounded-2xl w-80 outline-none focus:bg-white focus:ring-4 focus:ring-brand-primary/5 transition-all text-sm"
             />
           </div>
-
+          
           <label className="cursor-pointer bg-brand-primary text-white px-8 py-3 rounded-2xl font-bold flex items-center space-x-2 hover:bg-brand-primary/90 transition-all shadow-lg shadow-brand-primary/20">
             {isUploading ? <Loader2 className="animate-spin" size={18} /> : <Upload size={18} />}
             <span>Subir Material</span>
@@ -174,6 +181,7 @@ const MaterialsCenter = () => {
         </div>
       </header>
 
+      {/* Filters */}
       <div className="flex items-center space-x-4 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
          <Filter size={16} className="text-gray-400 ml-2" />
          <div className="flex-1">
@@ -195,13 +203,16 @@ const MaterialsCenter = () => {
               >
                 <div className="flex justify-between items-start mb-4">
                   <div className={`p-3 rounded-2xl ${
-                    material.type === 'pdf' ? 'bg-red-50 text-red-500' :
+                    material.type === 'pdf' ? 'bg-red-50 text-red-500' : 
                     material.type === 'image' ? 'bg-blue-50 text-blue-500' : 'bg-brand-light text-brand-primary'
                   }`}>
                     {material.type === 'pdf' ? <FileText size={24} /> : material.type === 'image' ? <ImageIcon size={24} /> : <File size={24} />}
                   </div>
+                  <button className="text-gray-300 hover:text-gray-600 p-1">
+                    <MoreVertical size={18} />
+                  </button>
                 </div>
-
+                
                 <div className="space-y-2">
                    <h3 className="font-bold text-gray-900 group-hover:text-brand-primary transition-colors line-clamp-1">{material.title}</h3>
                    <div className="flex items-center space-x-2 text-xs text-gray-400">
@@ -252,7 +263,7 @@ const MaterialsCenter = () => {
                 <div className="h-40 bg-gray-50 flex items-center justify-center">
                   <FileSearch size={48} className="text-gray-200" />
                 </div>
-
+                
                 <div className="p-8 space-y-8">
                   <div className="space-y-2">
                     <h2 className="text-xl font-bold text-gray-900">{selectedMaterial.title}</h2>
@@ -268,7 +279,7 @@ const MaterialsCenter = () => {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <button
+                    <button 
                       onClick={() => handleProcessAI(selectedMaterial)}
                       disabled={processingAI}
                       className="flex flex-col items-center justify-center p-4 bg-brand-light hover:bg-brand-primary/10 text-brand-primary rounded-2xl transition-all border border-brand-primary/20 space-y-2 disabled:opacity-50"
@@ -276,7 +287,7 @@ const MaterialsCenter = () => {
                       {processingAI ? <Loader2 className="animate-spin" size={20} /> : <Brain size={20} />}
                       <span className="text-[10px] font-bold uppercase tracking-widest text-center">IA: Resumo & Cards</span>
                     </button>
-                    <button
+                    <button 
                       onClick={() => handleGenerateQuestions(selectedMaterial)}
                       disabled={generatingQuestions}
                       className="flex flex-col items-center justify-center p-4 bg-brand-secondary/10 hover:bg-brand-secondary/20 text-brand-secondary rounded-2xl transition-all border border-brand-secondary/20 space-y-2 disabled:opacity-50"
@@ -300,8 +311,11 @@ const MaterialsCenter = () => {
 
                   <div className="pt-8 border-t border-gray-50 flex items-center justify-between">
                      <button className="text-sm font-bold text-gray-500 hover:text-gray-900 transition-colors">Ver Documento</button>
-                     <button
-                       onClick={() => deleteMaterial(selectedMaterial.id)}
+                     <button 
+                       onClick={async () => {
+                         await supabase.from('materials').delete().eq('id', selectedMaterial.id);
+                         setSelectedMaterial(null);
+                       }}
                        className="p-2 text-gray-300 hover:text-red-500 transition-colors"
                      >
                        <Trash2 size={18} />

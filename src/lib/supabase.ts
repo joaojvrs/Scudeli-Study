@@ -1,85 +1,28 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+let _supabaseInstance: SupabaseClient<any> | null = null;
 
-export const loginWithGoogle = async () => {
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: { redirectTo: window.location.origin },
-  });
-  if (error) throw error;
-};
-
-export const logout = () => supabase.auth.signOut();
-
-export const trackAnalytics = async (
-  userId: string,
-  data: {
-    studySeconds?: number;
-    questionsAttempted?: number;
-    questionsCorrect?: number;
-    subjectId?: string;
-    isCorrect?: boolean;
-  }
-) => {
-  const today = new Date().toISOString().split('T')[0];
-  try {
-    const { data: existing } = await supabase
-      .from('analytics')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('date', today)
-      .maybeSingle();
-
-    if (!existing) {
-      await supabase.from('analytics').insert({
-        user_id: userId,
-        date: today,
-        study_seconds: data.studySeconds || 0,
-        questions_attempted: data.questionsAttempted || 0,
-        questions_correct: data.questionsCorrect || 0,
-      });
-    } else {
-      const updates: Record<string, number> = {};
-      if (data.studySeconds) updates.study_seconds = existing.study_seconds + data.studySeconds;
-      if (data.questionsAttempted) updates.questions_attempted = existing.questions_attempted + data.questionsAttempted;
-      if (data.questionsCorrect) updates.questions_correct = existing.questions_correct + data.questionsCorrect;
-      if (Object.keys(updates).length) {
-        await supabase.from('analytics').update(updates).eq('id', existing.id);
+export const supabase = new Proxy({} as SupabaseClient<any>, {
+  get(target, prop: string | symbol) {
+    if (!_supabaseInstance) {
+      if (!supabaseUrl || !supabaseAnonKey) {
+        throw new Error(
+          'Supabase configuration missing! Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your environment variables (Settings > Environment Variables).'
+        );
       }
+      _supabaseInstance = createClient(supabaseUrl, supabaseAnonKey);
     }
-
-    if (data.subjectId) {
-      const { data: existingStat } = await supabase
-        .from('subject_stats')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('subject_id', data.subjectId)
-        .eq('date', today)
-        .maybeSingle();
-
-      if (!existingStat) {
-        await supabase.from('subject_stats').insert({
-          user_id: userId,
-          subject_id: data.subjectId,
-          date: today,
-          total: data.questionsAttempted || 0,
-          correct: data.questionsCorrect || 0,
-        });
-      } else {
-        await supabase.from('subject_stats').update({
-          total: existingStat.total + (data.questionsAttempted || 0),
-          correct: existingStat.correct + (data.questionsCorrect || 0),
-        }).eq('id', existingStat.id);
-      }
+    
+    const value = (_supabaseInstance as any)[prop];
+    if (typeof value === 'function') {
+      return value.bind(_supabaseInstance);
     }
-  } catch (error) {
-    console.error('Error tracking analytics:', error);
+    return value;
   }
-};
+});
 
 export enum OperationType {
   CREATE = 'create',
@@ -90,8 +33,115 @@ export enum OperationType {
   WRITE = 'write',
 }
 
-export function handleSupabaseError(error: unknown, operationType: OperationType, path: string | null): never {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Supabase Error [${operationType}] ${path}:`, message);
-  throw new Error(message);
+export function handleSupabaseError(error: any, operationType: OperationType, path: string | null) {
+  const errInfo = {
+    error: error.message || String(error),
+    operationType,
+    path,
+    code: error.code,
+    details: error.details,
+    hint: error.hint
+  };
+  console.error('Supabase Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
 }
+
+export const trackAnalytics = async (userId: string, data: { studySeconds?: number, questionsAttempted?: number, questionsCorrect?: number, subjectId?: string, isCorrect?: boolean }) => {
+  const today = new Date().toISOString().split('T')[0];
+  
+  try {
+    const { data: existing, error: fetchError } = await supabase
+      .from('analytics')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('date', today)
+      .single();
+
+    if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 is "no rows returned"
+      throw fetchError;
+    }
+
+    if (!existing) {
+      const subjectStats: any = {};
+      if (data.subjectId) {
+        subjectStats[data.subjectId] = {
+          total: data.questionsAttempted || 0,
+          correct: data.questionsCorrect || 0
+        };
+      }
+      
+      const { error: insertError } = await supabase
+        .from('analytics')
+        .insert({
+          user_id: userId,
+          date: today,
+          study_seconds: data.studySeconds || 0,
+          questions_attempted: data.questionsAttempted || 0,
+          questions_correct: data.questionsCorrect || 0,
+          subject_stats: subjectStats
+        });
+      
+      if (insertError) throw insertError;
+    } else {
+      const subjectStats = existing.subject_stats || {};
+      if (data.subjectId) {
+        const current = subjectStats[data.subjectId] || { total: 0, correct: 0 };
+        subjectStats[data.subjectId] = {
+          total: current.total + (data.questionsAttempted || 0),
+          correct: current.correct + (data.questionsCorrect || 0)
+        };
+      }
+
+      const { error: updateError } = await supabase
+        .from('analytics')
+        .update({
+          study_seconds: (existing.study_seconds || 0) + (data.studySeconds || 0),
+          questions_attempted: (existing.questions_attempted || 0) + (data.questionsAttempted || 0),
+          questions_correct: (existing.questions_correct || 0) + (data.questionsCorrect || 0),
+          subject_stats: subjectStats
+        })
+        .eq('id', existing.id);
+      
+      if (updateError) throw updateError;
+    }
+  } catch (error) {
+    console.error('Error tracking analytics:', error);
+  }
+};
+
+export const loginWithGoogle = async () => {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin
+    }
+  });
+  
+  if (error) throw error;
+  return data;
+};
+
+export const signUpWithEmail = async (email: string, pass: string, name: string) => {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password: pass,
+    options: {
+      data: {
+        full_name: name,
+      }
+    }
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const signInWithEmail = async (email: string, pass: string) => {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password: pass,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const logout = () => supabase.auth.signOut();

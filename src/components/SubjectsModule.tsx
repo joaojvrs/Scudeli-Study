@@ -1,52 +1,50 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
-import {
-  Plus,
-  Trash2,
-  BookOpen,
+import { 
+  Plus, 
+  Trash2, 
+  BookOpen, 
+  Edit3, 
   Layers,
-  ChevronRight
+  Palette,
+  ChevronRight,
+  MoreVertical
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 const COLORS = [
   '#ff85a1', '#ff9a85', '#ffc785', '#85ffc7', '#85d3ff', '#a185ff', '#ff85ef', '#71717a'
 ];
 
 const SubjectsModule = () => {
-  const { subjects, tasks, notes, flashcards, session } = useAppContext();
+  const { subjects, tasks, notes, flashcards, supabaseUser } = useAppContext();
   const [isAdding, setIsAdding] = useState(false);
   const [name, setName] = useState('');
   const [color, setColor] = useState(COLORS[0]);
 
   const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!session || !name) return;
+    if (!supabaseUser || !name) return;
 
-    const { error } = await supabase.from('subjects').insert({
-      name,
-      color,
-      user_id: session.user.id,
-    });
-
-    if (error) {
-      handleSupabaseError(error, OperationType.CREATE, 'subjects');
-      return;
+    try {
+      await supabase.from('subjects').insert({
+        name,
+        color,
+        user_id: supabaseUser.id,
+        created_at: new Date().toISOString()
+      });
+      setName('');
+      setIsAdding(false);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.CREATE, 'subjects');
     }
-    setName('');
-    setIsAdding(false);
-  };
-
-  const deleteSubject = async (id: string) => {
-    const { error } = await supabase.from('subjects').delete().eq('id', id);
-    if (error) handleSupabaseError(error, OperationType.DELETE, `subjects/${id}`);
   };
 
   const getStats = (subjectId: string) => ({
     tasks: tasks.filter(t => t.subject_id === subjectId).length,
     notes: notes.filter(n => n.subject_id === subjectId).length,
-    cards: flashcards.filter(c => c.subject_id === subjectId).length,
+    cards: flashcards.filter(c => c.subject_id === subjectId).length
   });
 
   return (
@@ -80,9 +78,9 @@ const SubjectsModule = () => {
           <div className="space-y-4">
              <div className="space-y-2">
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Nome da Disciplina</label>
-                <input
-                  type="text"
-                  value={name}
+                <input 
+                  type="text" 
+                  value={name} 
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Ex: Anatomia Sistêmica"
                   className="w-full p-4 bg-brand-bg rounded-2xl outline-none text-gray-900 font-medium"
@@ -111,6 +109,7 @@ const SubjectsModule = () => {
         </motion.form>
       )}
 
+      {/* Subjects Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {subjects.map(subject => {
           const stats = getStats(subject.id);
@@ -121,24 +120,24 @@ const SubjectsModule = () => {
               className="bg-white p-8 rounded-3xl border border-gray-50 shadow-sm hover:shadow-xl transition-all group"
             >
               <div className="flex justify-between items-start mb-6">
-                 <div
+                 <div 
                    className="w-14 h-14 rounded-2xl flex items-center justify-center text-white shadow-lg"
                    style={{ backgroundColor: subject.color, boxShadow: `0 10px 15px -3px ${subject.color}30` }}
                  >
                     <BookOpen size={28} />
                  </div>
                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => deleteSubject(subject.id)}
+                    <button 
+                      onClick={() => supabase.from('subjects').delete().eq('id', subject.id)}
                       className="p-2 text-gray-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
                     >
                        <Trash2 size={18} />
                     </button>
                  </div>
               </div>
-
+              
               <h3 className="text-xl font-bold text-gray-900 mb-6 truncate">{subject.name}</h3>
-
+              
               <div className="grid grid-cols-3 gap-2">
                  <div className="p-3 bg-brand-bg rounded-2xl text-center">
                     <p className="text-lg font-bold text-gray-900">{stats.cards}</p>

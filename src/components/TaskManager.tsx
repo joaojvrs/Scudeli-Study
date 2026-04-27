@@ -1,92 +1,115 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
-import {
-  Plus,
-  Search,
-  Trash2,
-  CheckSquare,
+import { 
+  Plus, 
+  Search, 
+  Trash2, 
+  CheckSquare, 
+  Clock,
   Layout,
   List as ListIcon,
+  Flag,
+  Calendar,
+  MoreVertical,
   Share2
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Task, TaskStatus, TaskPriority } from '../types';
 
 const TaskManager = () => {
-  const { tasks, subjects, session, user } = useAppContext();
+  const { tasks, subjects, supabaseUser, user } = useAppContext();
   const [view, setView] = useState<'list' | 'kanban'>('kanban');
   const [isAdding, setIsAdding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
+  const handleShareTask = async (task: Task) => {
+    if (!supabaseUser || !user) return;
+    try {
+      const subject = subjects.find(s => s.id === task.subject_id)?.name || 'Geral';
+      await supabase.from('posts').insert({
+        user_id: supabaseUser.id,
+        user_name: user.name,
+        user_email: user.email,
+        content: `Tarefa concluída: ${task.title}. Mais uma meta batida! 🎯`,
+        type: 'achievement',
+        subject_id: task.subject_id || null,
+        created_at: new Date().toISOString(),
+        likes_count: 0,
+        comments_count: 0,
+        is_public: true,
+        likes: []
+      });
+      alert('Compartilhado na comunidade!');
+    } catch (err) {
+      handleSupabaseError(err, OperationType.CREATE, 'posts');
+    }
+  };
+
+  // New Task Form
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<TaskPriority>(TaskPriority.MEDIUM);
   const [subjectId, setSubjectId] = useState('');
   const [deadline, setDeadline] = useState('');
 
-  const filteredTasks = tasks.filter(t =>
+  const filteredTasks = tasks.filter(t => 
     t.title.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleShareTask = async (task: Task) => {
-    if (!session || !user) return;
-    const { error } = await supabase.from('posts').insert({
-      user_id: session.user.id,
-      user_name: user.name,
-      user_email: user.email,
-      text_content: `Tarefa concluída: ${task.title}. Mais uma meta batida!`,
-      type: 'achievement',
-      subject_id: task.subject_id || null,
-      likes_count: 0,
-      comments_count: 0,
-      is_public: true,
-    });
-    if (error) handleSupabaseError(error, OperationType.CREATE, 'posts');
-    else alert('Compartilhado na comunidade!');
-  };
-
   const handleAddTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!session || !title || !subjectId) return;
+    if (!supabaseUser || !title || !subjectId) return;
 
-    const { data: taskData, error } = await supabase.from('tasks').insert({
-      title,
-      priority,
-      status: TaskStatus.TODO,
-      subject_id: subjectId,
-      user_id: session.user.id,
-      deadline: deadline || null,
-    }).select().single();
-
-    if (error) {
-      handleSupabaseError(error, OperationType.CREATE, 'tasks');
-      return;
-    }
-
-    if (deadline && taskData) {
-      await supabase.from('events').insert({
-        title: `Tarefa: ${title}`,
-        type: 'other',
-        start: new Date(deadline).toISOString(),
-        end: new Date(new Date(deadline).getTime() + 60 * 60 * 1000).toISOString(),
-        user_id: session.user.id,
+    try {
+      // 1. Criar a Tarefa
+      const { data: taskData, error: taskError } = await supabase.from('tasks').insert({
+        title,
+        priority,
+        status: TaskStatus.TODO,
         subject_id: subjectId,
-      });
-    }
+        user_id: supabaseUser.id,
+        deadline: deadline || null,
+        created_at: new Date().toISOString()
+      }).select().single();
 
-    setTitle('');
-    setDeadline('');
-    setIsAdding(false);
+      if (taskError) throw taskError;
+
+      // 2. Sincronizar com Agenda (se houver prazo)
+      if (deadline && taskData) {
+        await supabase.from('events').insert({
+          title: `Tarefa: ${title}`,
+          type: 'other',
+          start: new Date(deadline).toISOString(),
+          end: new Date(new Date(deadline).getTime() + 60 * 60 * 1000).toISOString(), // +1 hora
+          user_id: supabaseUser.id,
+          subject_id: subjectId,
+          task_id: taskData.id // Referência cruzada
+        });
+      }
+
+      setTitle('');
+      setDeadline('');
+      setIsAdding(false);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.CREATE, 'tasks');
+    }
   };
 
   const updateStatus = async (id: string, status: TaskStatus) => {
-    const { error } = await supabase.from('tasks').update({ status }).eq('id', id);
-    if (error) handleSupabaseError(error, OperationType.UPDATE, `tasks/${id}`);
+    try {
+      await supabase.from('tasks').update({ status }).eq('id', id);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.UPDATE, `tasks/${id}`);
+    }
   };
 
   const deleteTask = async (id: string) => {
-    const { error } = await supabase.from('tasks').delete().eq('id', id);
-    if (error) handleSupabaseError(error, OperationType.DELETE, `tasks/${id}`);
+    try {
+      // 1. Deletar a tarefa
+      await supabase.from('tasks').delete().eq('id', id);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.DELETE, `tasks/${id}`);
+    }
   };
 
   const getPriorityColor = (p: TaskPriority) => {
@@ -138,8 +161,8 @@ const TaskManager = () => {
                        {subjects.find(s => s.id === task.subject_id)?.name || 'Geral'}
                     </span>
                  </div>
-                 <select
-                   value={task.status}
+                 <select 
+                   value={task.status} 
                    onChange={(e) => updateStatus(task.id, e.target.value as TaskStatus)}
                    className="text-[10px] font-bold bg-gray-50 p-1 rounded outline-none"
                  >
@@ -168,28 +191,18 @@ const TaskManager = () => {
         </div>
         <div className="flex items-center space-x-3">
           <div className="flex bg-white p-1 rounded-xl border border-gray-100">
-             <button
+             <button 
                onClick={() => setView('list')}
                className={`p-2 rounded-lg transition-colors ${view === 'list' ? 'bg-blue-50 text-blue-500' : 'text-gray-400'}`}
              >
                <ListIcon size={18} />
              </button>
-             <button
+             <button 
                onClick={() => setView('kanban')}
                className={`p-2 rounded-lg transition-colors ${view === 'kanban' ? 'bg-blue-50 text-blue-500' : 'text-gray-400'}`}
              >
                <Layout size={18} />
              </button>
-          </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input
-              type="text"
-              placeholder="Buscar tarefas..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-9 pr-4 py-2 bg-white border border-gray-100 rounded-xl text-sm outline-none"
-            />
           </div>
           <button
             onClick={() => setIsAdding(!isAdding)}
@@ -201,6 +214,7 @@ const TaskManager = () => {
         </div>
       </header>
 
+      {/* New Task Form */}
       {isAdding && (
         <motion.form
           initial={{ opacity: 0, y: -20 }}
@@ -211,9 +225,9 @@ const TaskManager = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
              <div className="space-y-2 col-span-1 md:col-span-2">
                 <label className="text-xs font-bold text-gray-400 uppercase">Tarefa</label>
-                <input
-                  type="text"
-                  value={title}
+                <input 
+                  type="text" 
+                  value={title} 
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Ex: Estudar Anatomia do Coração"
                   className="w-full p-4 bg-gray-50 rounded-xl outline-none text-sm"
@@ -222,8 +236,8 @@ const TaskManager = () => {
              </div>
              <div className="space-y-2">
                 <label className="text-xs font-bold text-gray-400 uppercase">Disciplina</label>
-                <select
-                  value={subjectId}
+                <select 
+                  value={subjectId} 
                   onChange={(e) => setSubjectId(e.target.value)}
                   className="w-full p-4 bg-gray-50 rounded-xl outline-none text-sm"
                   required
@@ -234,8 +248,8 @@ const TaskManager = () => {
              </div>
              <div className="space-y-2">
                 <label className="text-xs font-bold text-gray-400 uppercase">Prioridade</label>
-                <select
-                  value={priority}
+                <select 
+                  value={priority} 
                   onChange={(e) => setPriority(e.target.value as TaskPriority)}
                   className="w-full p-4 bg-gray-50 rounded-xl outline-none text-sm"
                 >
@@ -246,9 +260,9 @@ const TaskManager = () => {
              </div>
              <div className="space-y-2">
                 <label className="text-xs font-bold text-gray-400 uppercase">Prazo / Agenda</label>
-                <input
-                  type="datetime-local"
-                  value={deadline}
+                <input 
+                  type="datetime-local" 
+                  value={deadline} 
                   onChange={(e) => setDeadline(e.target.value)}
                   className="w-full p-4 bg-gray-50 rounded-xl outline-none text-sm font-medium"
                 />
@@ -261,6 +275,7 @@ const TaskManager = () => {
         </motion.form>
       )}
 
+      {/* Main View */}
       <div className="flex-1 min-h-0 overflow-x-auto">
         {view === 'kanban' ? (
           <div className="flex space-x-8 min-w-max pb-8 h-full">
@@ -284,7 +299,7 @@ const TaskManager = () => {
                    {filteredTasks.map(task => (
                       <tr key={task.id} className="border-b border-gray-50 hover:bg-gray-50/30 transition-colors">
                          <td className="p-6">
-                            <button
+                            <button 
                               onClick={() => updateStatus(task.id, task.status === TaskStatus.DONE ? TaskStatus.TODO : TaskStatus.DONE)}
                               className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-colors ${
                                 task.status === TaskStatus.DONE ? 'bg-green-500 border-green-500' : 'border-gray-200 hover:border-blue-500'

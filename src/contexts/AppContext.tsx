@@ -1,28 +1,32 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import type { Session } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabase';
-import { User, Subject, Task, Note, Flashcard, Question, Material, Event, GlobalTag, Post } from '../types';
+import { User as SupabaseUser } from '@supabase/supabase-js';
+import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
+import { User, Subject, Task, Note, Flashcard, Question, Material, Event, GlobalTag, Analytics, Simulation, StudyPlan, ErrorLog } from '../types';
 
 interface AppContextType {
   user: User | null;
-  session: Session | null;
+  supabaseUser: SupabaseUser | null;
   loading: boolean;
   subjects: Subject[];
   tasks: Task[];
   notes: Note[];
   flashcards: Flashcard[];
   questions: Question[];
+  errors: ErrorLog[];
   materials: Material[];
   events: Event[];
   tags: GlobalTag[];
-  posts: Post[];
+  analytics: Analytics[];
+  simulations: Simulation[];
+  studyPlans: StudyPlan[];
   refreshUserData: () => Promise<void>;
+  refreshAllData: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [session, setSession] = useState<Session | null>(null);
+  const [supabaseUser, setSupabaseUser] = useState<SupabaseUser | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -30,98 +34,120 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [notes, setNotes] = useState<Note[]>([]);
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [errors, setErrors] = useState<ErrorLog[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [tags, setTags] = useState<GlobalTag[]>([]);
-  const [posts, setPosts] = useState<Post[]>([]);
+  const [analytics, setAnalytics] = useState<Analytics[]>([]);
+  const [simulations, setSimulations] = useState<Simulation[]>([]);
+  const [studyPlans, setStudyPlans] = useState<StudyPlan[]>([]);
 
-  const refreshUserData = async () => {
-    const { data: { session: currentSession } } = await supabase.auth.getSession();
-    if (!currentSession) return;
-    const uid = currentSession.user.id;
+  const refreshUserData = async (uId?: string) => {
+    const id = uId || supabaseUser?.id;
+    if (!id) return;
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-    const { data: userData } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', uid)
-      .maybeSingle();
-
-    if (userData) {
-      setUser(userData as User);
-    } else {
-      const newUser: User = {
-        id: uid,
-        name: currentSession.user.user_metadata?.full_name || 'Estudante',
-        email: currentSession.user.email || '',
-        created_at: new Date().toISOString(),
-        streak: 0,
-        total_study_time: 0,
-      };
-      await supabase.from('users').insert(newUser);
-      setUser(newUser);
+      if (data) {
+        setUser(data as User);
+      } else if (error && error.code === 'PGRST116') {
+        // User doesn't exist, create profile
+        const newUser: User = {
+          id: id,
+          name: supabaseUser?.user_metadata?.full_name || 'Estudante',
+          email: supabaseUser?.email || '',
+          created_at: new Date().toISOString(),
+          streak: 0,
+          total_study_time: 0,
+        };
+        const { error: insertError } = await supabase.from('users').insert(newUser);
+        if (insertError) throw insertError;
+        setUser(newUser);
+      } else if (error) {
+        throw error;
+      }
+    } catch (error) {
+      handleSupabaseError(error, OperationType.GET, `users/${id}`);
     }
   };
 
-  const loadUserData = async (uid: string) => {
-    const [
-      { data: subjectsData },
-      { data: tasksData },
-      { data: notesData },
-      { data: cardsData },
-      { data: questionsData },
-      { data: materialsData },
-      { data: eventsData },
-      { data: tagsData },
-      { data: postsData },
-    ] = await Promise.all([
-      supabase.from('subjects').select('*').eq('user_id', uid),
-      supabase.from('tasks').select('*').eq('user_id', uid),
-      supabase.from('notes').select('*').eq('user_id', uid),
-      supabase.from('flashcards').select('*').eq('user_id', uid),
-      supabase.from('questions').select('*').eq('user_id', uid),
-      supabase.from('materials').select('*').eq('user_id', uid),
-      supabase.from('events').select('*').eq('user_id', uid),
-      supabase.from('tags').select('*').eq('user_id', uid),
-      supabase.from('posts').select('*').order('created_at', { ascending: false }),
-    ]);
+  const refreshAllData = async () => {
+    if (!supabaseUser) return;
+    const userId = supabaseUser.id;
 
-    setSubjects((subjectsData || []) as Subject[]);
-    setTasks((tasksData || []) as Task[]);
-    setNotes((notesData || []) as Note[]);
-    setFlashcards((cardsData || []) as Flashcard[]);
-    setQuestions((questionsData || []) as Question[]);
-    setMaterials((materialsData || []) as Material[]);
-    setEvents((eventsData || []) as Event[]);
-    setTags((tagsData || []) as GlobalTag[]);
-    setPosts((postsData || []) as Post[]);
-  };
+    try {
+      const [
+        { data: subjectsData },
+        { data: tasksData },
+        { data: notesData },
+        { data: flashcardsData },
+        { data: questionsData },
+        { data: errorsData },
+        { data: materialsData },
+        { data: eventsData },
+        { data: tagsData },
+        { data: analyticsData },
+        { data: simulationsData },
+        { data: studyPlansData }
+      ] = await Promise.all([
+        supabase.from('subjects').select('*').eq('user_id', userId),
+        supabase.from('tasks').select('*').eq('user_id', userId),
+        supabase.from('notes').select('*').eq('user_id', userId),
+        supabase.from('flashcards').select('*').eq('user_id', userId),
+        supabase.from('questions').select('*').eq('user_id', userId),
+        supabase.from('errors').select('*').eq('user_id', userId),
+        supabase.from('materials').select('*').eq('user_id', userId),
+        supabase.from('events').select('*').eq('user_id', userId),
+        supabase.from('tags').select('*').eq('user_id', userId),
+        supabase.from('analytics').select('*').eq('user_id', userId).order('date', { ascending: false }).limit(30),
+        supabase.from('simulations').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(20),
+        supabase.from('study_plans').select('*').eq('user_id', userId)
+      ]);
 
-  const clearUserData = () => {
-    setUser(null);
-    setSubjects([]);
-    setTasks([]);
-    setNotes([]);
-    setFlashcards([]);
-    setQuestions([]);
-    setMaterials([]);
-    setEvents([]);
-    setTags([]);
-    setPosts([]);
+      setSubjects(subjectsData || []);
+      setTasks(tasksData || []);
+      setNotes(notesData || []);
+      setFlashcards(flashcardsData || []);
+      setQuestions(questionsData || []);
+      setErrors(errorsData || []);
+      setMaterials(materialsData || []);
+      setEvents(eventsData || []);
+      setTags(tagsData || []);
+      setAnalytics(analyticsData || []);
+      setSimulations(simulationsData || []);
+      setStudyPlans(studyPlansData || []);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    }
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      if (!s) {
-        setLoading(false);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSupabaseUser(session?.user ?? null);
+      setLoading(false);
+      if (session?.user) {
+        refreshUserData(session.user.id);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-      if (!s) {
-        clearUserData();
-        setLoading(false);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSupabaseUser(session?.user ?? null);
+      if (session?.user) {
+        refreshUserData(session.user.id);
+      } else {
+        setUser(null);
+        setSubjects([]);
+        setTasks([]);
+        setNotes([]);
+        setFlashcards([]);
+        setQuestions([]);
+        setMaterials([]);
+        setEvents([]);
+        setTags([]);
       }
     });
 
@@ -129,82 +155,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   useEffect(() => {
-    if (!session) return;
-    const uid = session.user.id;
+    if (supabaseUser) {
+      refreshAllData();
 
-    const setup = async () => {
-      await refreshUserData();
-      await loadUserData(uid);
-      setLoading(false);
-    };
-    setup();
+      // Real-time listeners
+      const channels = [
+        'subjects', 'tasks', 'notes', 'flashcards', 'questions', 'errors', 'materials', 'events', 'tags', 'analytics', 'simulations', 'studyPlans'
+      ].map(table => 
+        supabase
+          .channel(`public:${table}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table, filter: `user_id=eq.${supabaseUser.id}` }, () => {
+            refreshAllData();
+          })
+          .subscribe()
+      );
 
-    const makeChannel = <T extends { id: string }>(
-      table: string,
-      setState: React.Dispatch<React.SetStateAction<T[]>>,
-      filter?: string
-    ) => {
-      const opts: any = { event: '*', schema: 'public', table };
-      if (filter) opts.filter = filter;
-
-      return supabase
-        .channel(`${table}_${uid}_${Math.random()}`)
-        .on('postgres_changes', { ...opts, event: 'INSERT' }, p => {
-          setState(prev => {
-            const item = p.new as T;
-            if (prev.some(i => i.id === item.id)) return prev;
-            return [...prev, item];
-          });
-        })
-        .on('postgres_changes', { ...opts, event: 'UPDATE' }, p => {
-          setState(prev => prev.map(i => i.id === (p.new as T).id ? p.new as T : i));
-        })
-        .on('postgres_changes', { ...opts, event: 'DELETE' }, p => {
-          setState(prev => prev.filter(i => i.id !== (p.old as { id: string }).id));
-        })
-        .subscribe();
-    };
-
-    const userFilter = `user_id=eq.${uid}`;
-    const channels = [
-      makeChannel<Subject>('subjects', setSubjects, userFilter),
-      makeChannel<Task>('tasks', setTasks, userFilter),
-      makeChannel<Note>('notes', setNotes, userFilter),
-      makeChannel<Flashcard>('flashcards', setFlashcards, userFilter),
-      makeChannel<Question>('questions', setQuestions, userFilter),
-      makeChannel<Material>('materials', setMaterials, userFilter),
-      makeChannel<Event>('events', setEvents, userFilter),
-      makeChannel<GlobalTag>('tags', setTags, userFilter),
-      makeChannel<Post>('posts', (action) => {
-        setPosts(prev => {
-          const result = typeof action === 'function' ? action(prev) : action;
-          return [...result].sort((a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          );
-        });
-      }),
-    ];
-
-    return () => {
-      channels.forEach(ch => supabase.removeChannel(ch));
-    };
-  }, [session?.user.id]);
+      return () => {
+        channels.forEach(channel => supabase.removeChannel(channel));
+      };
+    }
+  }, [supabaseUser]);
 
   return (
     <AppContext.Provider value={{
       user,
-      session,
+      supabaseUser,
       loading,
       subjects,
       tasks,
       notes,
       flashcards,
       questions,
+      errors,
       materials,
       events,
       tags,
-      posts,
+      analytics,
+      simulations,
+      studyPlans,
       refreshUserData,
+      refreshAllData
     }}>
       {children}
     </AppContext.Provider>

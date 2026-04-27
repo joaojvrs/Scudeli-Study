@@ -1,44 +1,44 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
 import { useAppContext } from '../contexts/AppContext';
-import { ErrorLog } from '../types';
-import {
-  RotateCcw,
-  Brain,
-  XCircle,
-  ChevronRight,
-  Zap
+import { Flashcard, ErrorLog } from '../types';
+import { 
+  RotateCcw, 
+  Brain, 
+  XCircle, 
+  ChevronRight, 
+  Zap, 
+  CheckCircle2,
+  CalendarDays,
+  Target
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 const DailyReview = () => {
-  const { session, subjects, flashcards } = useAppContext();
-  const [errors, setErrors] = useState<ErrorLog[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { supabaseUser, subjects, flashcards, errors } = useAppContext();
+  const [reviewQueue, setReviewQueue] = useState<{ id: string; type: 'flashcard' | 'error'; data: any }[]>([]);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!session) return;
+    if (!supabaseUser) return;
 
-    supabase
-      .from('errors')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .or('is_learned.eq.false,is_learned.is.null')
-      .order('answered_at', { ascending: false })
-      .limit(10)
-      .then(({ data }) => {
-        setErrors((data || []) as ErrorLog[]);
-        setLoading(false);
-      });
-  }, [session]);
+    const cards = flashcards
+      .filter(c => new Date(c.next_review) <= new Date())
+      .map(c => ({ id: c.id, type: 'flashcard' as const, data: c }));
 
-  const now = new Date();
-  const dueFlashcards = flashcards.filter(c => new Date(c.next_review) <= now);
+    const errs = errors
+      .filter(e => !e.is_learned)
+      .slice(0, 10)
+      .map(e => ({ id: e.id, type: 'error' as const, data: e }));
 
-  const reviewQueue = [
-    ...errors.map(e => ({ id: e.id, type: 'error' as const, data: e })),
-    ...dueFlashcards.map(c => ({ id: c.id, type: 'flashcard' as const, data: c })),
-  ];
+    const combined = [...cards, ...errs].sort((a, b) => {
+      if (a.type === 'error' && b.type === 'flashcard') return -1;
+      return 0;
+    });
+
+    setReviewQueue(combined);
+  }, [supabaseUser, flashcards, errors]);
+
 
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20">
@@ -63,6 +63,7 @@ const DailyReview = () => {
            </button>
         </div>
 
+        {/* Decor */}
         <div className="absolute right-0 top-0 w-32 h-32 bg-brand-primary/5 rounded-full -translate-y-1/2 translate-x-1/2" />
       </header>
 
@@ -74,7 +75,7 @@ const DailyReview = () => {
            </div>
            <div className="space-y-4">
               {reviewQueue.filter(i => i.type === 'flashcard').length > 0 ? (
-                reviewQueue.filter(i => i.type === 'flashcard').slice(0, 3).map((item) => (
+                reviewQueue.filter(i => i.type === 'flashcard').slice(0, 3).map((item, idx) => (
                   <div key={item.id} className="p-4 bg-gray-50 rounded-2xl flex items-center justify-between">
                     <span className="text-sm font-bold text-gray-700 truncate max-w-[200px]">{item.data.front}</span>
                     <ChevronRight size={16} className="text-gray-300" />
@@ -93,7 +94,7 @@ const DailyReview = () => {
            </div>
            <div className="space-y-4">
               {reviewQueue.filter(i => i.type === 'error').length > 0 ? (
-                reviewQueue.filter(i => i.type === 'error').slice(0, 3).map((item) => (
+                reviewQueue.filter(i => i.type === 'error').slice(0, 3).map((item, idx) => (
                   <div key={item.id} className="p-4 bg-red-50/50 rounded-2xl flex items-center justify-between">
                     <span className="text-sm font-bold text-gray-700 truncate max-w-[200px]">{item.data.context}</span>
                     <span className="text-[8px] font-black text-red-500 uppercase tracking-widest">Pendente</span>

@@ -1,89 +1,53 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
 import { useAppContext } from '../contexts/AppContext';
-import { Analytics, Simulation, SubjectStats } from '../types';
-import {
-  TrendingUp,
-  Clock,
-  Target,
+import { Analytics, Simulation } from '../types';
+import { 
+  TrendingUp, 
+  Clock, 
+  Target, 
   Award,
+  ChevronUp,
+  ChevronDown,
   Brain,
   Zap,
   BarChart2,
   XCircle
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Cell
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  Tooltip, 
+  ResponsiveContainer, 
+  Cell,
+  PieChart,
+  Pie
 } from 'recharts';
 
 const AnalyticsView = () => {
-  const { session, subjects } = useAppContext();
-  const [dailyStats, setDailyStats] = useState<Analytics[]>([]);
-  const [simulations, setSimulations] = useState<Simulation[]>([]);
-  const [subjectStatsData, setSubjectStatsData] = useState<SubjectStats[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { supabaseUser, subjects, analytics: dailyStats, simulations } = useAppContext();
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!session) return;
-    const uid = session.user.id;
 
-    const fetchData = async () => {
-      const [
-        { data: analyticsData },
-        { data: simsData },
-        { data: statsData },
-      ] = await Promise.all([
-        supabase
-          .from('analytics')
-          .select('*')
-          .eq('user_id', uid)
-          .order('date', { ascending: false })
-          .limit(10),
-        supabase
-          .from('simulations')
-          .select('*')
-          .eq('user_id', uid)
-          .order('created_at', { ascending: false })
-          .limit(5),
-        supabase
-          .from('subject_stats')
-          .select('*')
-          .eq('user_id', uid),
-      ]);
-
-      setDailyStats(((analyticsData || []) as Analytics[]).reverse());
-      setSimulations((simsData || []) as Simulation[]);
-      setSubjectStatsData((statsData || []) as SubjectStats[]);
-      setLoading(false);
-    };
-
-    fetchData();
-  }, [session]);
-
-  const totalStudyTime = dailyStats.reduce((acc, curr) => acc + (curr.study_seconds || 0), 0);
-  const totalQuestions = dailyStats.reduce((acc, curr) => acc + (curr.questions_attempted || 0), 0);
-  const totalCorrect = dailyStats.reduce((acc, curr) => acc + (curr.questions_correct || 0), 0);
+  const totalStudyTime = dailyStats.reduce((acc, curr) => acc + curr.study_seconds, 0);
+  const totalQuestions = dailyStats.reduce((acc, curr) => acc + curr.questions_attempted, 0);
+  const totalCorrect = dailyStats.reduce((acc, curr) => acc + curr.questions_correct, 0);
   const accuracy = totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
-  const avgTimePerQuestion = totalQuestions > 0 ? Math.round(totalStudyTime / totalQuestions) : 0;
+  const avgTimePerQuestion = totalQuestions > 0 ? Math.round((totalStudyTime / totalQuestions)) : 0;
 
   const subjectChartData = subjects.map(sub => {
-    const stats = subjectStatsData.filter(s => s.subject_id === sub.id);
-    const total = stats.reduce((acc, s) => acc + (s.total || 0), 0);
-    const correct = stats.reduce((acc, s) => acc + (s.correct || 0), 0);
-    return {
-      name: sub.name,
-      total,
-      correct,
-      accuracy: total > 0 ? Math.round((correct / total) * 100) : 0,
-      color: sub.color,
-    };
+    let total = 0;
+    let correct = 0;
+    dailyStats.forEach(day => {
+      if (day.subject_stats && day.subject_stats[sub.id]) {
+        total += day.subject_stats[sub.id].total;
+        correct += day.subject_stats[sub.id].correct;
+      }
+    });
+    return { name: sub.name, total, correct, accuracy: total > 0 ? Math.round((correct / total) * 100) : 0, color: sub.color };
   }).filter(s => s.total > 0);
 
   const insights = [
@@ -238,11 +202,11 @@ const AnalyticsView = () => {
             </div>
             <div className="space-y-4">
                {insights.map((insight, idx) => (
-                 <motion.div
+                 <motion.div 
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: idx * 0.1 }}
-                    key={idx}
+                    key={idx} 
                     className="p-6 bg-white/5 rounded-3xl border border-white/10 flex items-start space-x-4"
                   >
                     <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${insight?.type === 'warning' ? 'bg-orange-400' : insight?.type === 'success' ? 'bg-green-400' : 'bg-blue-400'}`} />

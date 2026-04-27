@@ -1,11 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
-import {
-  Plus,
-  Search,
-  Trash2,
-  Play,
+import { 
+  Plus, 
+  Search, 
+  Trash2, 
+  Play, 
+  ChevronLeft, 
+  ChevronRight,
+  ExternalLink,
   Brain,
   Layers,
   Sparkles,
@@ -20,18 +23,20 @@ import { Flashcard } from '../types';
 import TagPicker from './TagPicker';
 
 const Flashcards = () => {
-  const { flashcards, subjects, session, tags: globalTags } = useAppContext();
+  const { flashcards, subjects, supabaseUser, tags: globalTags } = useAppContext();
   const [isAdding, setIsAdding] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTags, setFilterTags] = useState<string[]>([]);
 
+  // New Card Form
   const [front, setFront] = useState('');
   const [back, setBack] = useState('');
   const [subjectId, setSubjectId] = useState('');
   const [formTags, setFormTags] = useState<string[]>([]);
 
+  // Review State
   const [reviewCards, setReviewCards] = useState<Flashcard[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
@@ -40,7 +45,7 @@ const Flashcards = () => {
     return flashcards.filter(c => {
       const matchSubject = selectedSubject === 'all' || c.subject_id === selectedSubject;
       const searchLower = searchTerm.toLowerCase();
-      const matchSearch = c.front.toLowerCase().includes(searchLower) ||
+      const matchSearch = c.front.toLowerCase().includes(searchLower) || 
                           c.back.toLowerCase().includes(searchLower);
       const matchSearchTags = c.tags?.some(tag => tag.toLowerCase().includes(searchLower));
       const matchFilterTags = filterTags.length === 0 || filterTags.every(t => c.tags?.includes(t));
@@ -55,28 +60,28 @@ const Flashcards = () => {
 
   const handleAddCard = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!session || !front || !back || !subjectId) return;
+    if (!supabaseUser || !front || !back || !subjectId) return;
 
-    const { error } = await supabase.from('flashcards').insert({
-      front,
-      back,
-      subject_id: subjectId,
-      user_id: session.user.id,
-      next_review: new Date().toISOString(),
-      interval: 0,
-      easiness: 2.5,
-      repetitions: 0,
-      tags: formTags,
-    });
-
-    if (error) {
-      handleSupabaseError(error, OperationType.CREATE, 'flashcards');
-      return;
+    try {
+      await supabase.from('flashcards').insert({
+        front,
+        back,
+        subject_id: subjectId,
+        user_id: supabaseUser.id,
+        next_review: new Date().toISOString(),
+        interval: 0,
+        easiness: 2.5,
+        repetitions: 0,
+        created_at: new Date().toISOString(),
+        tags: formTags
+      });
+      setFront('');
+      setBack('');
+      setFormTags([]);
+      setIsAdding(false);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.CREATE, 'flashcards');
     }
-    setFront('');
-    setBack('');
-    setFormTags([]);
-    setIsAdding(false);
   };
 
   const calculateSM2 = (quality: number, interval: number, repetitions: number, easiness: number) => {
@@ -96,27 +101,31 @@ const Flashcards = () => {
 
     nextEasiness = Math.max(1.3, easiness + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
 
-    return { interval: nextInterval, repetitions: nextRepetitions, easiness: nextEasiness };
+    return {
+      interval: nextInterval,
+      repetitions: nextRepetitions,
+      easiness: nextEasiness
+    };
   };
 
   const handleReview = async (quality: number) => {
-    if (!session || currentIndex >= reviewCards.length) return;
+    if (!supabaseUser || currentIndex >= reviewCards.length) return;
     const card = reviewCards[currentIndex];
-
+    
     const { interval, repetitions, easiness } = calculateSM2(quality, card.interval, card.repetitions, card.easiness);
-
+    
     const nextReviewDate = new Date();
     nextReviewDate.setDate(nextReviewDate.getDate() + interval);
 
-    const { error } = await supabase.from('flashcards').update({
-      interval,
-      easiness,
-      repetitions,
-      next_review: nextReviewDate.toISOString(),
-    }).eq('id', card.id);
-
-    if (error) {
-      handleSupabaseError(error, OperationType.UPDATE, `flashcards/${card.id}`);
+    try {
+      await supabase.from('flashcards').update({
+        interval,
+        easiness,
+        repetitions,
+        next_review: nextReviewDate.toISOString()
+      }).eq('id', card.id);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.UPDATE, `flashcards/${card.id}`);
     }
 
     if (currentIndex < reviewCards.length - 1) {
@@ -136,11 +145,6 @@ const Flashcards = () => {
     setIsReviewing(true);
   };
 
-  const deleteCard = async (id: string) => {
-    const { error } = await supabase.from('flashcards').delete().eq('id', id);
-    if (error) handleSupabaseError(error, OperationType.DELETE, `flashcards/${id}`);
-  };
-
   if (isReviewing) {
     const card = reviewCards[currentIndex];
     const progress = ((currentIndex + 1) / reviewCards.length) * 100;
@@ -157,7 +161,7 @@ const Flashcards = () => {
               <div className="px-6 py-2 bg-white rounded-2xl shadow-sm border border-gray-100 text-sm font-black text-brand-primary">
                 {currentIndex + 1} / {reviewCards.length}
               </div>
-              <button
+              <button 
                 onClick={() => setIsReviewing(false)}
                 className="p-3 bg-white rounded-2xl shadow-sm border border-gray-100 text-gray-400 hover:text-red-500 transition-colors"
               >
@@ -178,7 +182,7 @@ const Flashcards = () => {
                 className="absolute inset-0 bg-white rounded-[40px] shadow-2xl p-16 flex flex-col items-center justify-center text-center cursor-pointer border border-gray-100 select-none group"
               >
                 <div className="absolute top-0 left-0 w-full h-2 bg-gray-100 overflow-hidden rounded-t-[40px]">
-                   <motion.div
+                   <motion.div 
                      initial={{ width: 0 }}
                      animate={{ width: `${progress}%` }}
                      className="h-full bg-brand-primary shadow-[0_0_15px_rgba(255,59,108,0.5)]"
@@ -195,7 +199,7 @@ const Flashcards = () => {
                 <h3 className="text-3xl font-bold text-gray-900 leading-[1.4] max-w-md font-montserrat tracking-tight">
                   {showAnswer ? card.back : card.front}
                 </h3>
-
+                
                 <div className="absolute bottom-10 flex items-center space-x-2 text-gray-300 group-hover:text-brand-primary transition-colors">
                    <RotateCcw size={14} className="animate-spin-slow" />
                    <span className="text-[10px] font-bold uppercase tracking-widest">Toque para virar</span>
@@ -207,7 +211,7 @@ const Flashcards = () => {
           <div className="flex justify-center h-20">
             <AnimatePresence>
               {showAnswer && (
-                <motion.div
+                <motion.div 
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="flex space-x-6 h-full w-full"
@@ -241,8 +245,8 @@ const Flashcards = () => {
             onClick={startReview}
             disabled={cardsToReview.length === 0}
             className={`flex items-center space-x-3 px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl ${
-              cardsToReview.length === 0
-                ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
+              cardsToReview.length === 0 
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200' 
                 : 'bg-brand-primary text-white hover:scale-105 active:scale-95 shadow-brand-primary/20'
             }`}
           >
@@ -260,6 +264,7 @@ const Flashcards = () => {
         </div>
       </header>
 
+      {/* Filters & Actions */}
       <div className="space-y-4">
         <div className="flex flex-wrap gap-4">
           <div className="flex-1 min-w-[300px] relative">
@@ -355,9 +360,9 @@ const Flashcards = () => {
         {filteredCards.map(card => {
            const subject = subjects.find(s => s.id === card.subject_id);
            return (
-            <motion.div
+            <motion.div 
               layout
-              key={card.id}
+              key={card.id} 
               className="group bg-white p-8 rounded-[32px] border border-gray-100 shadow-sm hover:shadow-xl transition-all relative overflow-hidden flex flex-col h-full"
             >
               <div className="flex justify-between items-start mb-6">
@@ -366,14 +371,14 @@ const Flashcards = () => {
                       {subject?.name || 'Geral'}
                     </span>
                  </div>
-                 <button
-                  onClick={() => deleteCard(card.id)}
+                 <button 
+                  onClick={() => supabase.from('flashcards').delete().eq('id', card.id)}
                   className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 shadow-sm"
                  >
                    <Trash2 size={14} />
                  </button>
               </div>
-
+              
               <p className="text-lg font-bold text-gray-900 leading-tight mb-8 flex-1 font-montserrat tracking-tight line-clamp-4">
                 {card.front}
               </p>

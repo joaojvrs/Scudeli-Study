@@ -1,25 +1,27 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
-import {
-  ChevronLeft,
-  ChevronRight,
+import { 
+  ChevronLeft, 
+  ChevronRight, 
   Calendar as CalendarIcon,
   Plus,
   Clock,
+  MapPin,
   Tag
 } from 'lucide-react';
-import { format, addMonths, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay } from 'date-fns';
+import { format, addMonths, subMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, addDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { EventType } from '../types';
 
 const AcademicCalendar = () => {
-  const { events, subjects, session } = useAppContext();
+  const { events, subjects, supabaseUser } = useAppContext();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isAdding, setIsAdding] = useState(false);
 
+  // New Event Form
   const [title, setTitle] = useState('');
   const [type, setType] = useState<EventType>(EventType.OTHER);
   const [subjectId, setSubjectId] = useState('');
@@ -34,27 +36,27 @@ const AcademicCalendar = () => {
 
   const handleAddEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!session || !title) return;
+    if (!supabaseUser || !title) return;
 
     const [startH, startM] = startTime.split(':');
     const [endH, endM] = endTime.split(':');
-
+    
     const start = new Date(selectedDate);
     start.setHours(parseInt(startH), parseInt(startM));
-
+    
     const end = new Date(selectedDate);
     end.setHours(parseInt(endH), parseInt(endM));
 
     try {
-      const { error } = await supabase.from('events').insert({
+      await supabase.from('events').insert({
         title,
         type,
         start: start.toISOString(),
         end: end.toISOString(),
-        subject_id: subjectId || null,
-        user_id: session.user.id,
+        subject_id: subjectId || 'none',
+        user_id: supabaseUser.id,
+        created_at: new Date().toISOString()
       });
-      if (error) throw error;
       setTitle('');
       setIsAdding(false);
     } catch (err) {
@@ -114,8 +116,8 @@ const AcademicCalendar = () => {
                 const isCurrentMonth = isSameMonth(day, monthStart);
 
                 return (
-                  <div
-                    key={i}
+                  <div 
+                    key={i} 
                     onClick={() => setSelectedDate(day)}
                     className={`min-h-[120px] p-2 border-b border-r border-gray-50 cursor-pointer transition-colors relative ${
                       !isCurrentMonth ? 'bg-gray-50/30' : 'hover:bg-brand-light/20'
@@ -130,8 +132,8 @@ const AcademicCalendar = () => {
                      </div>
                      <div className="space-y-1 overflow-y-auto max-h-[80px] scrollbar-none">
                         {dayEvents.map(e => (
-                          <div
-                            key={e.id}
+                          <div 
+                            key={e.id} 
                             className={`px-2 py-1 rounded text-[9px] font-bold text-white truncate shadow-sm ${getEventColor(e.type)}`}
                           >
                              {e.title}
@@ -149,7 +151,7 @@ const AcademicCalendar = () => {
          <div className="bg-white p-8 rounded-3xl shadow-lg border border-gray-50 sticky top-24">
             <div className="flex items-center justify-between mb-8">
                <h3 className="font-bold text-gray-900 uppercase tracking-widest text-xs">Eventos do Dia</h3>
-               <button
+               <button 
                  onClick={() => setIsAdding(!isAdding)}
                  className="p-2 bg-brand-primary text-white rounded-xl shadow-lg shadow-brand-primary/20 hover:scale-105 transition-transform"
                >
@@ -168,9 +170,9 @@ const AcademicCalendar = () => {
                  >
                     <div className="space-y-1">
                        <label className="text-[10px] font-bold text-gray-400 uppercase">Título</label>
-                       <input
-                         type="text"
-                         value={title}
+                       <input 
+                         type="text" 
+                         value={title} 
                          onChange={(e) => setTitle(e.target.value)}
                          className="w-full p-3 bg-brand-bg rounded-xl text-sm outline-none"
                          placeholder="Ex: Prova de Farmacologia"
@@ -180,8 +182,8 @@ const AcademicCalendar = () => {
                     <div className="grid grid-cols-2 gap-4">
                        <div className="space-y-1">
                           <label className="text-[10px] font-bold text-gray-400 uppercase">Tipo</label>
-                          <select
-                            value={type}
+                          <select 
+                            value={type} 
                             onChange={(e) => setType(e.target.value as EventType)}
                             className="w-full p-3 bg-brand-bg rounded-xl text-xs outline-none"
                           >
@@ -193,8 +195,8 @@ const AcademicCalendar = () => {
                        </div>
                        <div className="space-y-1">
                           <label className="text-[10px] font-bold text-gray-400 uppercase">Disciplina</label>
-                          <select
-                            value={subjectId}
+                          <select 
+                            value={subjectId} 
                             onChange={(e) => setSubjectId(e.target.value)}
                             className="w-full p-3 bg-brand-bg rounded-xl text-xs outline-none"
                           >

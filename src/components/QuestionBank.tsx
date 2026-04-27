@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType, trackAnalytics } from '../lib/supabase';
-import {
-  Plus,
-  Search,
-  BookOpen,
-  ChevronRight,
-  CheckCircle2,
-  XCircle,
+import { 
+  Plus, 
+  Search, 
+  BookOpen, 
+  ChevronRight, 
+  CheckCircle2, 
+  XCircle, 
   MessageSquare,
   Filter,
   BrainCircuit,
@@ -17,15 +17,17 @@ import {
   Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Question, Material, QuestionType } from '../types';
+import { Question, Material, QuestionType, GlobalTag } from '../types';
 import { geminiService } from '../services/geminiService';
 import SimulationMode from './SimulationMode';
 import TagPicker from './TagPicker';
 
 const QuestionBank = () => {
-  const { subjects, session, user, tags: globalTags, questions, materials } = useAppContext();
+  const { subjects, supabaseUser, user, tags: globalTags, questions, materials } = useAppContext();
+  const [loading, setLoading] = useState(false);
   const [activeView, setActiveView] = useState<'browse' | 'create' | 'simulation' | 'ai'>('browse');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
+  const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
   const [showExplanation, setShowExplanation] = useState<Record<string, boolean>>({});
 
@@ -52,40 +54,41 @@ const QuestionBank = () => {
   const [formSubjectId, setFormSubjectId] = useState('');
   const [formTags, setFormTags] = useState<string[]>([]);
 
+
   const handleAddQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!session || !questionText || !formSubjectId) return;
+    if (!supabaseUser || !questionText || !formSubjectId) return;
 
     try {
-      const { error } = await supabase.from('questions').insert({
+      await supabase.from('questions').insert({
         text: questionText,
         options,
-        answer_index: correctIndex,
+        answerIndex: correctIndex,
         explanation,
         difficulty,
         subject_id: formSubjectId,
-        user_id: session.user.id,
+        user_id: supabaseUser.id,
+        created_at: new Date().toISOString(),
         source: 'manual',
-        tags: formTags,
+        tags: formTags
       });
-      if (error) handleSupabaseError(error, OperationType.CREATE, 'questions');
       setActiveView('browse');
       setQuestionText('');
       setOptions(['', '', '', '']);
       setExplanation('');
       setFormTags([]);
     } catch (err) {
-      console.error(err);
+      handleSupabaseError(err, OperationType.CREATE, 'questions');
     }
   };
 
   const handleGenerateAiQuestions = async () => {
-    if (!session) return;
+    if (!supabaseUser) return;
     if (aiSourceType === 'theme' && (!aiTheme || !aiSubject)) return;
     if (aiSourceType === 'document' && !selectedMaterialId) return;
 
     setIsAiGenerating(true);
-
+    
     try {
       let aiQuestions: Partial<Question>[] = [];
       let sourceTag = aiTheme;
@@ -94,8 +97,11 @@ const QuestionBank = () => {
       if (aiSourceType === 'document') {
         const material = materials.find(m => m.id === selectedMaterialId);
         if (!material) throw new Error("Material não encontrado");
-
+        
+        // Simulating reading document content (in a real app, you'd fetch the file content)
+        // Here we use the title and meta-info as a proxy or assume we have text extraction
         const simulatedContent = `Documento: ${material.title}. Resumo prévio: ${material.summary || ''}. Tags: ${material.tags.join(', ')}`;
+        
         aiQuestions = await geminiService.generateQuestionsFromContent(simulatedContent, aiQuestionType, aiDifficulty, aiCount);
         sourceTag = material.title;
         targetSubjectId = material.subject_id;
@@ -103,18 +109,18 @@ const QuestionBank = () => {
         const subjectName = subjects.find(s => s.id === aiSubject)?.name || 'Medicina';
         aiQuestions = await geminiService.generateQuestions(subjectName, aiTheme, aiDifficulty, aiCount);
       }
-
+      
       for (const q of aiQuestions) {
-        const { error } = await supabase.from('questions').insert({
+        await supabase.from('questions').insert({
           ...q,
-          user_id: session.user.id,
+          user_id: supabaseUser.id,
           subject_id: targetSubjectId,
           difficulty: aiDifficulty,
+          created_at: new Date().toISOString(),
           source: 'ai',
           material_id: aiSourceType === 'document' ? selectedMaterialId : null,
-          tags: ['ia-generated', aiSourceType, sourceTag.toLowerCase(), ...sourceTag.split(' ').map(t => t.toLowerCase()).filter(t => t.length > 3)],
+          tags: ['ia-generated', aiSourceType, sourceTag.toLowerCase(), ...sourceTag.split(' ').map(t => t.toLowerCase()).filter(t => t.length > 3)]
         });
-        if (error) console.error(error);
       }
       setIsAiGenerating(false);
       setAiTheme('');
@@ -132,40 +138,44 @@ const QuestionBank = () => {
     setShowExplanation(prev => ({ ...prev, [qId]: true }));
 
     const question = questions.find(q => q.id === qId);
-    if (!question || !session) return;
+    if (!question || !supabaseUser) return;
 
-    const isCorrect = index === question.answer_index;
+    const isCorrect = index === question.answerIndex;
 
-    trackAnalytics(session.user.id, {
-      questionsAttempted: 1,
-      questionsCorrect: isCorrect ? 1 : 0,
-      subjectId: question.subject_id,
-      isCorrect,
+    // Track Analytics
+    trackAnalytics(supabaseUser.id, {
+      questions_attempted: 1,
+      questions_correct: isCorrect ? 1 : 0,
+      subject_id: question.subject_id,
+      is_correct: isCorrect
     });
 
     if (!isCorrect) {
       try {
+        // Criar item no Caderno de Erros
         await supabase.from('errors').insert({
-          user_id: session.user.id,
+          user_id: supabaseUser.id,
           question_id: qId,
           answered_at: new Date().toISOString(),
           wrong_option_index: index,
-          correct_option_index: question.answer_index,
+          correct_option_index: question.answerIndex,
           subject_id: question.subject_id,
           context: question.text,
-          is_learned: false,
+          is_learned: false
         });
 
+        // Opcionalmente: Criar Flashcard do erro
         await supabase.from('flashcards').insert({
           front: `[REVISÃO DE ERRO] ${question.text}`,
-          back: `Resposta Correta: ${question.options[question.answer_index]}\n\nExplicação: ${question.explanation || 'Nenhuma'}`,
+          back: `Resposta Correta: ${question.options[question.answerIndex]}\n\nExplicação: ${question.explanation || 'Nenhuma'}`,
           subject_id: question.subject_id,
-          user_id: session.user.id,
+          user_id: supabaseUser.id,
           next_review: new Date().toISOString(),
           interval: 0,
           easiness: 2.5,
           repetitions: 0,
-          tags: ['erro-automatizado', ...question.tags],
+          created_at: new Date().toISOString(),
+          tags: ['erro-automatizado', ...question.tags]
         });
       } catch (err) {
         console.error("Erro ao processar erro de questão:", err);
@@ -247,7 +257,7 @@ const QuestionBank = () => {
             {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
-
+        
         <div className="flex items-center space-x-3">
           <Filter size={14} className="text-gray-400" />
           <div className="flex-1">
@@ -274,25 +284,25 @@ const QuestionBank = () => {
             </div>
 
             <div className="flex p-1 bg-white rounded-2xl border border-gray-100 w-fit">
-               <button
+               <button 
                 onClick={() => setAiSourceType('theme')}
                 className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${aiSourceType === 'theme' ? 'bg-brand-secondary text-white shadow-md' : 'text-gray-400 hover:text-gray-600'}`}
                >
                  Por Tema
                </button>
-               <button
+               <button 
                 onClick={() => setAiSourceType('document')}
                 className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${aiSourceType === 'document' ? 'bg-brand-secondary text-white shadow-md' : 'text-gray-400 hover:text-gray-600'}`}
                >
                  Por Documento
                </button>
             </div>
-
+            
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               {aiSourceType === 'theme' ? (
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Tema Específico</label>
-                  <input
+                  <input 
                     type="text"
                     placeholder="Ex: Diabetes Mellitus tipo 2"
                     value={aiTheme}
@@ -303,7 +313,7 @@ const QuestionBank = () => {
               ) : (
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Selecionar Material</label>
-                  <select
+                  <select 
                     value={selectedMaterialId}
                     onChange={(e) => setSelectedMaterialId(e.target.value)}
                     className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
@@ -313,11 +323,11 @@ const QuestionBank = () => {
                   </select>
                 </div>
               )}
-
+              
               {aiSourceType === 'theme' && (
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Disciplina</label>
-                  <select
+                  <select 
                     value={aiSubject}
                     onChange={(e) => setAiSubject(e.target.value)}
                     className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
@@ -330,9 +340,9 @@ const QuestionBank = () => {
 
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Tipo de Questão</label>
-                <select
+                <select 
                   value={aiQuestionType}
-                  onChange={(e) => setAiQuestionType(e.target.value as QuestionType)}
+                  onChange={(e) => setAiQuestionType(e.target.value as any)}
                   className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
                 >
                   <option value={QuestionType.MULTIPLE_CHOICE}>Múltipla Escolha</option>
@@ -343,9 +353,9 @@ const QuestionBank = () => {
 
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Dificuldade</label>
-                <select
+                <select 
                   value={aiDifficulty}
-                  onChange={(e) => setAiDifficulty(e.target.value as 'easy'|'medium'|'hard')}
+                  onChange={(e) => setAiDifficulty(e.target.value as any)}
                   className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
                 >
                   <option value="easy">Fácil</option>
@@ -355,7 +365,7 @@ const QuestionBank = () => {
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Quantidade</label>
-                <input
+                <input 
                   type="number"
                   min="1"
                   max="10"
@@ -369,10 +379,10 @@ const QuestionBank = () => {
             <div className="flex justify-end pt-4">
               <button
                 onClick={handleGenerateAiQuestions}
-                disabled={isAiGenerating || (aiSourceType === 'theme' ? !aiTheme || !aiSubject : !selectedMaterialId)}
+                disabled={loading || (aiSourceType === 'theme' ? !aiTheme || !aiSubject : !selectedMaterialId)}
                 className="bg-brand-secondary text-white px-10 py-4 rounded-2xl font-bold flex items-center space-x-2 hover:bg-brand-secondary/90 transition-all shadow-lg shadow-brand-secondary/20 disabled:opacity-50"
               >
-                {isAiGenerating ? <Loader2 className="animate-spin" size={20} /> : <Zap size={20} />}
+                {loading || isAiGenerating ? <Loader2 className="animate-spin" size={20} /> : <Zap size={20} />}
                 <span>{isAiGenerating ? 'Gerando...' : 'Gerar Questões agora'}</span>
               </button>
             </div>
@@ -387,33 +397,34 @@ const QuestionBank = () => {
             onSubmit={handleAddQuestion}
             className="bg-white p-8 rounded-3xl shadow-xl border border-brand-light space-y-6"
           >
+            {/* ... form content adapted to brand primary ... */}
             <div className="space-y-4">
                <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Enunciado da Questão</label>
-                  <textarea
-                    value={questionText}
+                  <textarea 
+                    value={questionText} 
                     onChange={(e) => setQuestionText(e.target.value)}
                     placeholder="Descreva o caso clínico ou a pergunta teórica..."
                     className="w-full p-4 bg-gray-50 rounded-2xl outline-none text-sm min-h-[120px] focus:bg-white focus:ring-4 focus:ring-brand-primary/5 border border-transparent focus:border-brand-primary/20 transition-all"
                     required
                   />
                </div>
-
+               
                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-4">
                      <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Alternativas</label>
                      {options.map((opt, i) => (
                        <div key={i} className="flex items-center space-x-3">
-                          <button
-                            type="button"
+                          <button 
+                            type="button" 
                             onClick={() => setCorrectIndex(i)}
                             className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${correctIndex === i ? 'bg-brand-primary border-brand-primary' : 'border-gray-200 hover:border-brand-primary/50'}`}
                           >
                              {correctIndex === i && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
                           </button>
-                          <input
-                            type="text"
-                            value={opt}
+                          <input 
+                            type="text" 
+                            value={opt} 
                             onChange={(e) => {
                               const newOpts = [...options];
                               newOpts[i] = e.target.value;
@@ -426,12 +437,12 @@ const QuestionBank = () => {
                        </div>
                      ))}
                   </div>
-
+                  
                   <div className="space-y-6">
                      <div className="space-y-2">
                         <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Gabarito Comentado</label>
-                        <textarea
-                          value={explanation}
+                        <textarea 
+                          value={explanation} 
                           onChange={(e) => setExplanation(e.target.value)}
                           placeholder="Explique por que esta alternativa é a correta..."
                           className="w-full p-4 bg-gray-50 rounded-2xl outline-none text-sm min-h-[150px] border border-transparent focus:bg-white focus:border-brand-primary/20 transition-all"
@@ -443,12 +454,12 @@ const QuestionBank = () => {
                            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Tags Especializadas</label>
                            <TagPicker selectedTags={formTags} onChange={setFormTags} />
                         </div>
-
+                        
                         <div className="grid grid-cols-2 gap-4">
                            <div className="space-y-2">
                               <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Disciplina</label>
-                              <select
-                                value={formSubjectId}
+                              <select 
+                                value={formSubjectId} 
                                 onChange={(e) => setFormSubjectId(e.target.value)}
                                 className="w-full p-4 bg-gray-50 rounded-2xl text-xs outline-none focus:bg-white border focus:border-brand-primary/20 transition-all"
                                 required
@@ -459,9 +470,9 @@ const QuestionBank = () => {
                            </div>
                            <div className="space-y-2">
                               <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Dificuldade</label>
-                              <select
-                                value={difficulty}
-                                onChange={(e) => setDifficulty(e.target.value as 'easy'|'medium'|'hard')}
+                              <select 
+                                value={difficulty} 
+                                onChange={(e) => setDifficulty(e.target.value as any)}
                                 className="w-full p-4 bg-gray-50 rounded-2xl text-xs outline-none focus:bg-white border focus:border-brand-primary/20 transition-all"
                               >
                                  <option value="easy">Fácil</option>
@@ -484,8 +495,8 @@ const QuestionBank = () => {
 
       <div className="space-y-6">
         {filteredQuestions.map((q, qIndex) => (
-          <motion.div
-            key={q.id}
+          <motion.div 
+            key={q.id} 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: qIndex * 0.05 }}
@@ -522,7 +533,7 @@ const QuestionBank = () => {
 
                 <div className="grid grid-cols-1 gap-3">
                    {q.options.map((opt, i) => {
-                      const isCorrect = i === q.answer_index;
+                      const isCorrect = i === q.answerIndex;
                       const isSelected = selectedAnswers[q.id] === i;
                       const hasAnswered = selectedAnswers[q.id] !== undefined;
 
@@ -542,7 +553,7 @@ const QuestionBank = () => {
                         >
                            <div className="flex items-center space-x-5">
                               <span className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm transition-all sm:group-hover/opt:scale-110 ${
-                                isCorrect && hasAnswered ? 'bg-green-500 text-white' :
+                                isCorrect && hasAnswered ? 'bg-green-500 text-white' : 
                                 isSelected && !isCorrect ? 'bg-red-500 text-white' : 'bg-white text-gray-400 group-hover/opt:text-brand-primary'
                               }`}>
                                  {String.fromCharCode(65 + i)}
@@ -577,7 +588,7 @@ const QuestionBank = () => {
           </motion.div>
         ))}
 
-        {filteredQuestions.length === 0 && (
+        {filteredQuestions.length === 0 && !loading && (
           <div className="py-32 bg-gray-50/50 rounded-[40px] border border-dashed border-gray-200 flex flex-col items-center justify-center text-center p-8 space-y-4">
              <div className="p-6 bg-white rounded-3xl shadow-sm border border-gray-100">
                <BrainCircuit className="text-gray-200" size={64} />

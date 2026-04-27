@@ -17,12 +17,6 @@ export enum EventType {
   OTHER = 'other',
 }
 
-export enum QuestionType {
-  MULTIPLE_CHOICE = 'multiple_choice',
-  TRUE_FALSE = 'true_false',
-  OPEN_ENDED = 'open_ended',
-}
-
 export interface ErrorLog {
   id: string;
   user_id: string;
@@ -42,15 +36,12 @@ export interface Analytics {
   study_seconds: number;
   questions_attempted: number;
   questions_correct: number;
-}
-
-export interface SubjectStats {
-  id: string;
-  user_id: string;
-  subject_id: string;
-  date: string;
-  total: number;
-  correct: number;
+  subject_stats: {
+    [subjectId: string]: {
+      total: number;
+      correct: number;
+    }
+  };
 }
 
 export interface User {
@@ -63,7 +54,7 @@ export interface User {
   created_at: string;
   streak: number;
   last_study_date?: string;
-  total_study_time: number;
+  total_study_time: number; // total minutes
 }
 
 export interface Subject {
@@ -118,11 +109,17 @@ export interface Event {
   subject_id: string;
 }
 
+export enum QuestionType {
+  MULTIPLE_CHOICE = 'multiple_choice',
+  TRUE_FALSE = 'true_false',
+  OPEN_ENDED = 'open_ended'
+}
+
 export interface Question {
   id: string;
   text: string;
   options: string[];
-  answer_index: number;
+  answerIndex: number;
   explanation?: string;
   subject_id: string;
   user_id: string;
@@ -131,12 +128,12 @@ export interface Question {
   source?: 'manual' | 'ai';
   type: QuestionType;
   material_id?: string;
-  created_at: string;
+  created_at: any;
 }
 
 export interface StudySession {
   id: string;
-  duration: number;
+  duration: number; // in minutes
   subject_id: string;
   user_id: string;
   timestamp: string;
@@ -161,13 +158,13 @@ export interface StudyPlan {
   name: string;
   exam_date: string;
   target_content: string;
-  daily_availability: number;
+  daily_availability: number; // minutes
   schedule: {
     date: string;
     topics: string[];
     completed: boolean;
   }[];
-  created_at: string;
+  created_at: any;
 }
 
 export interface Simulation {
@@ -175,13 +172,13 @@ export interface Simulation {
   user_id: string;
   subject_id: string;
   count: number;
-  time_limit: number;
+  time_limit: number; // minutes
   question_ids: string[];
   user_answers: { [questionId: string]: number };
   score: number;
   correct_count: number;
-  duration: number;
-  created_at: string;
+  duration: number; // actual time spent in seconds
+  created_at: any;
 }
 
 export interface GlobalTag {
@@ -196,37 +193,7 @@ export interface PerformanceMetric {
   user_id: string;
   subject_id: string;
   date: string;
-  accuracy: number;
+  accuracy: number; // 0-1
   questions_answered: number;
   time_spent: number;
-}
-
-export interface Post {
-  id: string;
-  user_id: string;
-  user_name: string;
-  user_email: string;
-  content: string;
-  text_content?: string;
-  image_url?: string;
-  music_link?: string;
-  audio_url?: string;
-  type: 'study_update' | 'achievement' | 'reflection';
-  subject_id?: string;
-  topic?: string;
-  study_minutes?: number;
-  attachment_url?: string;
-  created_at: string;
-  likes_count: number;
-  comments_count: number;
-  is_public: boolean;
-}
-
-export interface Comment {
-  id: string;
-  post_id: string;
-  user_id: string;
-  user_name: string;
-  content: string;
-  created_at: string;
 }

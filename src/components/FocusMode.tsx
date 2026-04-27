@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  Play,
-  Pause,
-  RotateCcw,
-  X,
-  Target,
-  Zap,
-  Waves,
-  FileText,
-  BrainCircuit,
+import { 
+  Timer, 
+  Play, 
+  Pause, 
+  RotateCcw, 
+  X, 
+  Target, 
+  Zap, 
+  Waves, 
+  FileText, 
+  BrainCircuit, 
+  HelpCircle, 
   BookOpen,
-  Send,
   Trophy
 } from 'lucide-react';
 import { useAppContext } from '../contexts/AppContext';
@@ -23,7 +24,7 @@ interface FocusModeProps {
 }
 
 const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
-  const { subjects, session, user, notes, flashcards, materials } = useAppContext();
+  const { subjects, supabaseUser, notes, flashcards, questions, materials } = useAppContext();
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [isActive, setIsActive] = useState(false);
   const [mode, setMode] = useState<'work' | 'break'>('work');
@@ -31,42 +32,40 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
   const [focusType, setFocusType] = useState<'pdf' | 'card' | 'note' | 'none'>('none');
   const [selectedContentId, setSelectedContentId] = useState<string | null>(defaultTargetId || null);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [sessionInfo, setSessionInfo] = useState<{ minutes: number; subjectId: string } | null>(null);
   const [distractionFree, setDistractionFree] = useState(true);
 
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
+    let interval: any = null;
     if (isActive && timeLeft > 0) {
       interval = setInterval(() => {
         setTimeLeft((prev) => prev - 1);
       }, 1000);
     } else if (timeLeft === 0) {
-      handleSessionComplete();
-      if (interval) clearInterval(interval);
+      handleSessionCompleteSpace();
+      clearInterval(interval);
     }
-    return () => { if (interval) clearInterval(interval); };
+    return () => clearInterval(interval);
   }, [isActive, timeLeft]);
 
-  const handleSessionComplete = async () => {
+  const handleSessionCompleteSpace = async () => {
     setIsActive(false);
-    if (mode === 'work' && session) {
+    if (mode === 'work' && supabaseUser) {
       const durationMinutes = 25;
-      setSessionInfo({ minutes: durationMinutes, subjectId: selectedSubject });
-      setShowShareModal(true);
       try {
-        await supabase.from('study_sessions').insert({
-          user_id: session.user.id,
-          subject_id: selectedSubject || 'general',
+        await supabase.from('studySessions').insert({
+          userId: supabaseUser.id,
+          subjectId: selectedSubject || 'general',
           duration: durationMinutes,
+          timestamp: new Date().toISOString(),
           type: 'focus',
-          focus_type: focusType,
-          content_id: selectedContentId,
+          focusType,
+          contentId: selectedContentId
         });
 
-        await trackAnalytics(session.user.id, {
-          study_seconds: durationMinutes * 60,
-          subject_id: selectedSubject || 'general',
+        // Track Daily Analytics
+        await trackAnalytics(supabaseUser.id, {
+          studySeconds: durationMinutes * 60,
+          subjectId: selectedSubject || 'general'
         });
 
         if (onComplete) onComplete();
@@ -84,12 +83,21 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const selectedContent = () => {
+    if (!selectedContentId) return null;
+    if (focusType === 'note') return notes.find(n => n.id === selectedContentId);
+    if (focusType === 'card') return flashcards.find(f => f.id === selectedContentId);
+    if (focusType === 'pdf') return materials.find(m => m.id === selectedContentId);
+    return null;
+  };
+
   const progress = ((mode === 'work' ? 25 * 60 : 5 * 60) - timeLeft) / (mode === 'work' ? 25 * 60 : 5 * 60);
 
   return (
     <div className="fixed inset-0 min-h-screen bg-gray-950 flex flex-col items-center justify-center z-50 p-6 overflow-hidden">
+      {/* Distraction Blocking Overlay */}
       {isActive && distractionFree && (
-        <motion.div
+        <motion.div 
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           className="absolute inset-0 z-40 bg-gray-950 pointer-events-none"
@@ -97,6 +105,7 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
         />
       )}
 
+      {/* Background Ambience */}
       <div className="absolute inset-0 opacity-10 pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand-primary rounded-full blur-[128px] animate-pulse" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-brand-primary rounded-full blur-[128px] animate-pulse delay-1000" />
@@ -111,7 +120,7 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
           </div>
         </div>
         <div className="flex items-center space-x-4">
-           <button
+           <button 
              onClick={() => setDistractionFree(!distractionFree)}
              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
                distractionFree ? 'bg-brand-primary text-white' : 'bg-white/5 text-white/40'
@@ -119,7 +128,7 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
            >
              Focus Lock: {distractionFree ? 'ON' : 'OFF'}
            </button>
-           <button
+           <button 
              onClick={() => setShowExitConfirm(true)}
              className="p-3 bg-white/5 hover:bg-white/10 rounded-full text-white/50 hover:text-white transition-all"
            >
@@ -129,18 +138,31 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
       </header>
 
       <div className={`max-w-4xl w-full grid grid-cols-1 ${isActive ? 'lg:grid-cols-12' : ''} gap-12 items-center transition-all duration-700 z-50`}>
+        {/* Timer Section */}
         <div className={`${isActive ? 'lg:col-span-12' : ''} text-center space-y-12`}>
           <div className="space-y-4">
              <h2 className="text-white/40 text-sm font-medium tracking-widest uppercase">
               {mode === 'work' ? 'Deep Work' : 'Refilmagem'}
              </h2>
-
+             
              <div className="relative inline-block">
                 <svg className="w-64 h-64 md:w-80 md:h-80 transform -rotate-90">
-                  <circle cx="160" cy="160" r="150" stroke="currentColor" strokeWidth="4" fill="transparent" className="text-white/5" />
+                  <circle
+                    cx="160"
+                    cy="160"
+                    r="150"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                    fill="transparent"
+                    className="text-white/5"
+                  />
                   <motion.circle
-                    cx="160" cy="160" r="150"
-                    stroke="currentColor" strokeWidth="8" fill="transparent"
+                    cx="160"
+                    cy="160"
+                    r="150"
+                    stroke="currentColor"
+                    strokeWidth="8"
+                    fill="transparent"
                     strokeDasharray={2 * Math.PI * 150}
                     initial={{ strokeDashoffset: 2 * Math.PI * 150 }}
                     animate={{ strokeDashoffset: 2 * Math.PI * 150 * (1 - progress) }}
@@ -175,21 +197,21 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
                 <div className="space-y-4">
                   <p className="text-white/60 text-[10px] font-black uppercase tracking-widest">Conteúdo de Foco</p>
                   <div className="flex bg-white/5 p-1 rounded-2xl border border-white/10">
-                    <button
+                    <button 
                       onClick={() => setFocusType('pdf')}
                       className={`flex-1 py-3 rounded-xl flex flex-col items-center space-y-1 transition-all ${focusType === 'pdf' ? 'bg-brand-primary text-white' : 'text-white/40 hover:text-white'}`}
                     >
                       <BookOpen size={16} />
                       <span className="text-[10px] font-bold">PDF</span>
                     </button>
-                    <button
+                    <button 
                       onClick={() => setFocusType('card')}
                       className={`flex-1 py-3 rounded-xl flex flex-col items-center space-y-1 transition-all ${focusType === 'card' ? 'bg-brand-primary text-white' : 'text-white/40 hover:text-white'}`}
                     >
                       <BrainCircuit size={16} />
                       <span className="text-[10px] font-bold">CARDS</span>
                     </button>
-                    <button
+                    <button 
                       onClick={() => setFocusType('note')}
                       className={`flex-1 py-3 rounded-xl flex flex-col items-center space-y-1 transition-all ${focusType === 'note' ? 'bg-brand-primary text-white' : 'text-white/40 hover:text-white'}`}
                     >
@@ -203,7 +225,7 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
               {focusType !== 'none' && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
                    <p className="text-white/60 text-[10px] font-black uppercase tracking-widest">Selecionar {focusType === 'pdf' ? 'Material' : focusType === 'card' ? 'Deck' : 'Resumo'}</p>
-                   <select
+                   <select 
                      value={selectedContentId || ''}
                      onChange={(e) => setSelectedContentId(e.target.value)}
                      className="bg-white/5 border border-white/10 text-white px-6 py-4 rounded-2xl outline-none focus:border-brand-primary transition-all w-full text-sm font-bold"
@@ -218,7 +240,10 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
 
               <div className="flex items-center justify-center space-x-6 pt-8">
                 <button
-                   onClick={() => { setIsActive(false); setTimeLeft(mode === 'work' ? 25 * 60 : 5 * 60); }}
+                   onClick={() => {
+                     setIsActive(false);
+                     setTimeLeft(mode === 'work' ? 25 * 60 : 5 * 60);
+                   }}
                    className="p-5 bg-white/5 hover:bg-white/10 rounded-full text-white/50 transition-all active:scale-95 border border-white/5"
                 >
                   <RotateCcw size={24} />
@@ -229,7 +254,9 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
                 >
                   {isActive ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" className="ml-2" />}
                 </button>
-                <button className="p-5 bg-white/5 hover:bg-white/10 rounded-full text-white/50 transition-all active:scale-95 border border-white/5">
+                <button
+                   className="p-5 bg-white/5 hover:bg-white/10 rounded-full text-white/50 transition-all active:scale-95 border border-white/5"
+                >
                   <Target size={24} />
                 </button>
               </div>
@@ -275,13 +302,13 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
                 <p className="text-white/40 text-sm">O tempo acumulado nesta sessão não será registrado se você sair agora.</p>
               </div>
               <div className="flex flex-col space-y-3">
-                <button
-                  onClick={() => window.location.reload()}
+                <button 
+                  onClick={() => window.location.reload()} 
                   className="w-full bg-red-500 text-white py-3 rounded-xl font-bold hover:bg-red-600 transition-colors"
                 >
                   Confirmar Saída
                 </button>
-                <button
+                <button 
                   onClick={() => setShowExitConfirm(false)}
                   className="w-full bg-white/5 text-white/60 py-3 rounded-xl font-bold hover:bg-white/10 transition-colors"
                 >
@@ -291,97 +318,7 @@ const FocusMode = ({ defaultTargetId, onComplete }: FocusModeProps) => {
             </div>
           </motion.div>
         )}
-        {showShareModal && sessionInfo && (
-          <ShareSessionModal
-            minutes={sessionInfo.minutes}
-            subjectId={sessionInfo.subjectId}
-            onClose={() => setShowShareModal(false)}
-          />
-        )}
       </AnimatePresence>
-    </div>
-  );
-};
-
-const ShareSessionModal = ({ minutes, subjectId, onClose }: { minutes: number; subjectId: string; onClose: () => void }) => {
-  const { user, session, subjects } = useAppContext();
-  const [content, setContent] = useState(`Mantenho o foco! Completei uma sessão de ${minutes} minutos${subjectId ? ` de ${subjects.find(s => s.id === subjectId)?.name || ''}` : ''}. #ScudeliStudy`);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const handleShare = async () => {
-    if (!session || !user) return;
-    setIsSubmitting(true);
-    try {
-      const { error } = await supabase.from('posts').insert({
-        user_id: session.user.id,
-        user_name: user.name || user.email || 'Estudante',
-        user_email: user.email,
-        text_content: content,
-        type: 'achievement',
-        subject_id: subjectId || null,
-        study_minutes: minutes,
-        likes_count: 0,
-        comments_count: 0,
-        is_public: true,
-      });
-      if (error) throw error;
-      onClose();
-    } catch (error) {
-      handleSupabaseError(error, OperationType.CREATE, 'posts');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="absolute inset-0 bg-gray-950/80 backdrop-blur-md"
-        onClick={onClose}
-      />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9, y: 30 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.9, y: 30 }}
-        className="relative bg-white w-full max-w-lg rounded-[40px] shadow-2xl p-10 overflow-hidden"
-      >
-        <div className="flex flex-col items-center text-center space-y-6 mb-8">
-           <div className="w-20 h-20 bg-brand-primary/10 rounded-[30px] flex items-center justify-center text-brand-primary">
-              <Trophy size={40} />
-           </div>
-           <div className="space-y-2">
-              <h3 className="text-2xl font-bold text-gray-900">Sessão Concluída!</h3>
-              <p className="text-gray-500 font-medium">Você mandou bem no foco. Quer inspirar a comunidade?</p>
-           </div>
-        </div>
-
-        <div className="space-y-6">
-           <textarea
-             className="w-full h-32 bg-gray-50 rounded-2xl p-6 outline-none focus:ring-2 ring-brand-primary/20 text-gray-900 font-medium placeholder:text-gray-300 resize-none transition-all text-sm"
-             value={content}
-             onChange={(e) => setContent(e.target.value)}
-           />
-           <div className="flex flex-col space-y-3">
-              <button
-                onClick={handleShare}
-                disabled={isSubmitting}
-                className="w-full bg-brand-primary text-white py-4 rounded-2xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center space-x-2"
-              >
-                <Send size={18} />
-                <span>{isSubmitting ? 'Compartilhando...' : 'Postar no Feed'}</span>
-              </button>
-              <button
-                onClick={onClose}
-                className="w-full py-4 text-gray-400 font-bold hover:text-gray-600 transition-colors"
-              >
-                Agora não
-              </button>
-           </div>
-        </div>
-      </motion.div>
     </div>
   );
 };

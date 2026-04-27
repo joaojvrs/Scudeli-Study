@@ -2,57 +2,42 @@ import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
 import { ErrorLog } from '../types';
-import {
-  XCircle,
-  Trash2,
+import { 
+  XCircle, 
+  Trash2, 
+  ChevronRight, 
+  Zap, 
   AlertCircle,
   Clock,
+  BookOpen,
   Search,
   Brain,
   CheckCircle2
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 const ErrorNotebook = () => {
-  const { session, subjects } = useAppContext();
-  const [errors, setErrors] = useState<ErrorLog[]>([]);
+  const { supabaseUser, subjects, errors } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('all');
 
-  useEffect(() => {
-    if (!session) return;
-
-    supabase
-      .from('errors')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .order('answered_at', { ascending: false })
-      .then(({ data }) => setErrors((data || []) as ErrorLog[]));
-
-    const channel = supabase
-      .channel(`errors_${session.user.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'errors', filter: `user_id=eq.${session.user.id}` }, p => {
-        setErrors(prev => [p.new as ErrorLog, ...prev]);
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'errors', filter: `user_id=eq.${session.user.id}` }, p => {
-        setErrors(prev => prev.map(e => e.id === (p.new as ErrorLog).id ? p.new as ErrorLog : e));
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'errors', filter: `user_id=eq.${session.user.id}` }, p => {
-        setErrors(prev => prev.filter(e => e.id !== (p.old as { id: string }).id));
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [session]);
 
   const removeError = async (id: string) => {
-    const { error } = await supabase.from('errors').delete().eq('id', id);
-    if (error) handleSupabaseError(error, OperationType.DELETE, `errors/${id}`);
+    try {
+      await supabase.from('errors').delete().eq('id', id);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.DELETE, `errors/${id}`);
+    }
   };
 
   const toggleLearned = async (id: string, currentStatus: boolean) => {
-    const { error } = await supabase.from('errors').update({ is_learned: !currentStatus }).eq('id', id);
-    if (error) handleSupabaseError(error, OperationType.UPDATE, `errors/${id}`);
+    try {
+      await supabase.from('errors').update({
+        is_learned: !currentStatus
+      }).eq('id', id);
+    } catch (err) {
+      handleSupabaseError(err, OperationType.UPDATE, `errors/${id}`);
+    }
   };
 
   const filteredErrors = errors.filter(e => {
@@ -79,6 +64,7 @@ const ErrorNotebook = () => {
         </div>
       </header>
 
+      {/* Filters */}
       <div className="flex flex-wrap gap-4">
         <div className="flex-1 min-w-[300px] relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
@@ -133,9 +119,9 @@ const ErrorNotebook = () => {
                  </div>
               </div>
             </div>
-
+            
             <div className="flex items-center space-x-4">
-               <button
+               <button 
                 onClick={() => toggleLearned(error.id, !!error.is_learned)}
                 className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
                   error.is_learned ? 'bg-green-50 text-green-500' : 'bg-gray-50 text-gray-300 hover:text-green-500 hover:bg-green-50'
@@ -144,13 +130,13 @@ const ErrorNotebook = () => {
                >
                  <CheckCircle2 size={20} />
                </button>
-               <button
+               <button 
                 className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-300 hover:text-brand-primary hover:bg-brand-light transition-all"
                 title="Criar Flashcard deste erro"
                >
                  <Brain size={20} />
                </button>
-               <button
+               <button 
                 onClick={() => removeError(error.id)}
                 className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
                >

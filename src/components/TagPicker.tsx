@@ -9,7 +9,7 @@ interface TagPickerProps {
 }
 
 const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
-  const { tags, session } = useAppContext();
+  const { tags, supabaseUser } = useAppContext();
   const [newTagName, setNewTagName] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -18,29 +18,29 @@ const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
   ];
 
   const handleCreateTag = async () => {
-    if (!newTagName.trim() || !session) return;
-
+    if (!newTagName.trim() || !supabaseUser) return;
+    
     const tagName = newTagName.trim().toLowerCase();
-
+    
+    // Check if exists
     if (tags.some(t => t.name === tagName)) {
       toggleTag(tagName);
       setNewTagName('');
       return;
     }
 
-    const color = colors[Math.floor(Math.random() * colors.length)];
-    const { error } = await supabase.from('tags').insert({
-      user_id: session.user.id,
-      name: tagName,
-      color,
-    });
-
-    if (error) {
-      handleSupabaseError(error, OperationType.CREATE, 'tags');
-      return;
+    try {
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      await supabase.from('tags').insert({
+        user_id: supabaseUser.id,
+        name: tagName,
+        color
+      });
+      toggleTag(tagName);
+      setNewTagName('');
+    } catch (err) {
+      handleSupabaseError(err, OperationType.CREATE, 'tags');
     }
-    toggleTag(tagName);
-    setNewTagName('');
   };
 
   const toggleTag = (name: string) => {
@@ -57,10 +57,10 @@ const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
         {selectedTags.map(tagName => {
           const tagInfo = tags.find(t => t.name === tagName);
           return (
-            <span
+            <span 
               key={tagName}
               className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center space-x-2 shadow-sm"
-              style={{
+              style={{ 
                 backgroundColor: tagInfo?.color ? `${tagInfo.color}15` : '#F3F4F6',
                 color: tagInfo?.color || '#9CA3AF',
                 border: `1px solid ${tagInfo?.color ? `${tagInfo.color}30` : '#E5E7EB'}`
@@ -68,7 +68,7 @@ const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
             >
               <Hash size={10} />
               <span>{tagName}</span>
-              <button
+              <button 
                 type="button"
                 onClick={() => toggleTag(tagName)}
                 className="hover:opacity-60 transition-opacity"
@@ -83,7 +83,7 @@ const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
       <div className="relative">
         <div className="flex items-center space-x-2 bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3 focus-within:ring-4 focus-within:ring-brand-primary/5 transition-all">
           <Tag size={16} className="text-gray-400" />
-          <input
+          <input 
             type="text"
             value={newTagName}
             onChange={(e) => {
@@ -100,7 +100,7 @@ const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
             placeholder="Adicionar tags..."
             className="flex-1 bg-transparent outline-none text-sm font-bold"
           />
-          <button
+          <button 
             type="button"
             onClick={handleCreateTag}
             className="p-1 hover:bg-gray-200 rounded-lg transition-colors text-gray-400"

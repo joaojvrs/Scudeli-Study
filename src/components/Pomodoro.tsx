@@ -1,26 +1,28 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
-import {
-  Play,
-  Pause,
-  RotateCcw,
-  Brain,
-  Coffee,
-  Settings
+import { 
+  Play, 
+  Pause, 
+  RotateCcw, 
+  Brain, 
+  Coffee, 
+  Settings,
+  Bell,
+  Volume2
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 const Pomodoro = () => {
-  const { subjects, session } = useAppContext();
-
+  const { subjects, supabaseUser } = useAppContext();
+  
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [isActive, setIsActive] = useState(false);
   const [mode, setMode] = useState<'focus' | 'break'>('focus');
   const [sessionsCompleted, setSessionsCompleted] = useState(0);
   const [selectedSubject, setSelectedSubject] = useState('');
-
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const totalTime = mode === 'focus' ? 25 * 60 : 5 * 60;
   const progress = ((totalTime - timeLeft) / totalTime) * 100;
@@ -43,23 +45,31 @@ const Pomodoro = () => {
 
   const handleTimerComplete = async () => {
     setIsActive(false);
-
-    if (mode === 'focus' && session) {
+    
+    if (mode === 'focus') {
       setSessionsCompleted(prev => prev + 1);
-      const { error } = await supabase.from('study_sessions').insert({
-        duration: 25,
-        subject_id: selectedSubject || 'none',
-        user_id: session.user.id,
-        type: 'pomodoro',
-      });
-      if (error) handleSupabaseError(error, OperationType.CREATE, 'study_sessions');
+      // Save session to Supabase
+      if (supabaseUser) {
+        try {
+          await supabase.from('studySessions').insert({
+            duration: 25,
+            subjectId: selectedSubject || 'none',
+            userId: supabaseUser.id,
+            type: 'pomodoro',
+            timestamp: new Date().toISOString()
+          });
+        } catch (err) {
+          handleSupabaseError(err, OperationType.CREATE, 'studySessions');
+        }
+      }
       setMode('break');
       setTimeLeft(5 * 60);
     } else {
       setMode('focus');
       setTimeLeft(25 * 60);
     }
-
+    
+    // Play sound notification (browser permitting)
     try {
       const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
       audio.play();
@@ -86,8 +96,9 @@ const Pomodoro = () => {
         <p className="text-gray-500">Mantenha sua concentração e evite o burnout acadêmico.</p>
       </header>
 
+      {/* Mode Selector */}
       <div className="bg-white p-2 rounded-2xl shadow-sm border border-gray-100 flex space-x-2">
-        <button
+        <button 
           onClick={() => { setMode('focus'); setTimeLeft(25 * 60); setIsActive(false); }}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all ${
             mode === 'focus' ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' : 'text-gray-400 hover:text-brand-primary'
@@ -96,7 +107,7 @@ const Pomodoro = () => {
           <Brain size={18} />
           <span>Foco</span>
         </button>
-        <button
+        <button 
           onClick={() => { setMode('break'); setTimeLeft(5 * 60); setIsActive(false); }}
           className={`flex items-center space-x-2 px-6 py-3 rounded-xl font-bold transition-all ${
             mode === 'break' ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' : 'text-gray-400 hover:text-brand-primary'
@@ -107,12 +118,26 @@ const Pomodoro = () => {
         </button>
       </div>
 
+      {/* Timer Circle */}
       <div className="relative w-80 h-80 flex items-center justify-center">
+        {/* SVG Progress Circle */}
         <svg className="w-full h-full -rotate-90">
-          <circle cx="160" cy="160" r="150" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-gray-100" />
+          <circle
+            cx="160"
+            cy="160"
+            r="150"
+            stroke="currentColor"
+            strokeWidth="8"
+            fill="transparent"
+            className="text-gray-100"
+          />
           <motion.circle
-            cx="160" cy="160" r="150"
-            stroke="currentColor" strokeWidth="8" fill="transparent"
+            cx="160"
+            cy="160"
+            r="150"
+            stroke="currentColor"
+            strokeWidth="8"
+            fill="transparent"
             strokeLinecap="round"
             className="text-brand-primary"
             initial={{ strokeDasharray: 942, strokeDashoffset: 942 }}
@@ -131,24 +156,28 @@ const Pomodoro = () => {
         </div>
       </div>
 
+      {/* Controls */}
       <div className="flex items-center space-x-6">
-        <button
+        <button 
           onClick={resetTimer}
           className="p-4 bg-white border border-gray-100 rounded-full text-gray-400 hover:text-brand-primary transition-colors shadow-sm"
         >
           <RotateCcw size={24} />
         </button>
-        <button
+        <button 
           onClick={toggleTimer}
           className="w-20 h-20 bg-brand-primary text-white rounded-full flex items-center justify-center shadow-2xl shadow-brand-primary/30 hover:scale-105 active:scale-95 transition-all"
         >
           {isActive ? <Pause size={32} fill="currentColor" /> : <Play size={32} className="ml-1" fill="currentColor" />}
         </button>
-        <button className="p-4 bg-white border border-gray-100 rounded-full text-gray-400 hover:text-brand-primary transition-colors shadow-sm">
+        <button 
+          className="p-4 bg-white border border-gray-100 rounded-full text-gray-400 hover:text-brand-primary transition-colors shadow-sm"
+        >
           <Settings size={24} />
         </button>
       </div>
 
+      {/* Settings Summary */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full">
          <div className="bg-white p-6 rounded-3xl border border-gray-50 flex items-center justify-between">
             <div className="flex items-center space-x-4">
@@ -170,7 +199,7 @@ const Pomodoro = () => {
          <div className="bg-white p-6 rounded-3xl border border-gray-50 space-y-4">
             <div className="flex items-center justify-between">
                <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Estudar agora</span>
-               <select
+               <select 
                  value={selectedSubject}
                  onChange={(e) => setSelectedSubject(e.target.value)}
                  className="bg-brand-bg text-xs font-bold p-2 px-4 rounded-full outline-none"
@@ -181,10 +210,10 @@ const Pomodoro = () => {
             </div>
             <div className="flex items-center space-x-2">
                <div className="flex-1 h-2 bg-gray-50 rounded-full overflow-hidden">
-                  <motion.div
+                  <motion.div 
                     initial={{ width: 0 }}
                     animate={{ width: '65%' }}
-                    className="h-full bg-brand-primary"
+                    className="h-full bg-brand-primary" 
                   />
                </div>
                <span className="text-[10px] font-bold text-gray-400">Meta: 4/6h</span>
