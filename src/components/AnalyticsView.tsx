@@ -1,0 +1,258 @@
+import React, { useState, useEffect } from 'react';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { useAppContext } from '../contexts/AppContext';
+import { Analytics, Simulation } from '../types';
+import { 
+  TrendingUp, 
+  Clock, 
+  Target, 
+  Award,
+  ChevronUp,
+  ChevronDown,
+  Brain,
+  Zap,
+  BarChart2,
+  XCircle
+} from 'lucide-react';
+import { motion } from 'motion/react';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  Tooltip, 
+  ResponsiveContainer, 
+  Cell,
+  PieChart,
+  Pie
+} from 'recharts';
+
+const AnalyticsView = () => {
+  const { firebaseUser, subjects } = useAppContext();
+  const [dailyStats, setDailyStats] = useState<Analytics[]>([]);
+  const [simulations, setSimulations] = useState<Simulation[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!firebaseUser) return;
+    
+    // Daily Stats
+    const q = query(
+      collection(db, 'analytics'), 
+      where('userId', '==', firebaseUser.uid),
+      orderBy('date', 'desc'),
+      limit(10)
+    );
+    const unsub = onSnapshot(q, (snapshot) => {
+      setDailyStats(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Analytics)).reverse());
+      setLoading(false);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'analytics'));
+
+    // Simulations
+    const qSims = query(
+      collection(db, 'simulations'),
+      where('userId', '==', firebaseUser.uid),
+      orderBy('createdAt', 'desc'),
+      limit(5)
+    );
+    const unsubSims = onSnapshot(qSims, (snapshot) => {
+      setSimulations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Simulation)));
+    });
+
+    return () => {
+      unsub();
+      unsubSims();
+    };
+  }, [firebaseUser]);
+
+  const totalStudyTime = dailyStats.reduce((acc, curr) => acc + curr.studySeconds, 0);
+  const totalQuestions = dailyStats.reduce((acc, curr) => acc + curr.questionsAttempted, 0);
+  const totalCorrect = dailyStats.reduce((acc, curr) => acc + curr.questionsCorrect, 0);
+  const accuracy = totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
+  const avgTimePerQuestion = totalQuestions > 0 ? Math.round((totalStudyTime / totalQuestions)) : 0;
+
+  const subjectChartData = subjects.map(sub => {
+    let total = 0;
+    let correct = 0;
+    dailyStats.forEach(day => {
+      if (day.subjectStats && day.subjectStats[sub.id]) {
+        total += day.subjectStats[sub.id].total;
+        correct += day.subjectStats[sub.id].correct;
+      }
+    });
+    return { name: sub.name, total, correct, accuracy: total > 0 ? Math.round((correct / total) * 100) : 0, color: sub.color };
+  }).filter(s => s.total > 0);
+
+  const insights = [
+    accuracy < 70 ? { text: "Baixo desempenho geral. Foque em revisões teóricas antes de praticar.", type: 'warning' } : null,
+    accuracy > 85 ? { text: "Excelente precisão! Você está dominando os temas atuais.", type: 'success' } : null,
+    totalStudyTime < 3600 * 5 ? { text: "Consistência é a chave. Tente manter ao menos 1h de estudo diário.", type: 'info' } : null,
+  ].filter(Boolean);
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-10 pb-20">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+        <div className="flex items-center space-x-4">
+          <div className="w-14 h-14 bg-brand-light rounded-2xl flex items-center justify-center text-brand-primary">
+            <BarChart2 size={28} />
+          </div>
+          <div>
+            <h2 className="text-3xl font-bold text-gray-900 tracking-tight">Análise de Performance</h2>
+            <p className="text-sm text-gray-500 font-medium tracking-tight">Sua jornada acadêmica em dados e métricas reais.</p>
+          </div>
+        </div>
+      </header>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+        <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-sm space-y-4">
+          <div className="w-12 h-12 bg-blue-50 text-blue-500 rounded-2xl flex items-center justify-center">
+            <Clock size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tempo Total (Semana)</p>
+            <h3 className="text-3xl font-bold">{Math.round(totalStudyTime / 3600)}h {Math.round((totalStudyTime % 3600) / 60)}m</h3>
+          </div>
+        </div>
+        <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-sm space-y-4">
+          <div className="w-12 h-12 bg-brand-light text-brand-primary rounded-2xl flex items-center justify-center">
+            <Target size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Taxa de Acerto</p>
+            <h3 className="text-3xl font-bold">{accuracy}%</h3>
+          </div>
+        </div>
+        <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-sm space-y-4">
+          <div className="w-12 h-12 bg-green-50 text-green-500 rounded-2xl flex items-center justify-center">
+            <TrendingUp size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Questões Respondidas</p>
+            <h3 className="text-3xl font-bold">{totalQuestions}</h3>
+          </div>
+        </div>
+        <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-sm space-y-4">
+          <div className="w-12 h-12 bg-orange-50 text-orange-500 rounded-2xl flex items-center justify-center">
+            <Clock size={24} />
+          </div>
+          <div>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tempo Médio / Questão</p>
+            <h3 className="text-3xl font-bold">{avgTimePerQuestion}s</h3>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+        <div className="bg-white p-10 rounded-[40px] border border-gray-100 shadow-sm space-y-8">
+           <h4 className="text-xl font-bold text-gray-900 tracking-tight">Últimos Simulados</h4>
+           <div className="space-y-4">
+              {simulations.length > 0 ? simulations.map(sim => (
+                <div key={sim.id} className="p-6 bg-gray-50 rounded-3xl flex items-center justify-between group hover:bg-white hover:shadow-xl transition-all border border-transparent hover:border-brand-primary/10">
+                   <div className="flex items-center space-x-4">
+                      <div className="w-12 h-12 bg-brand-light text-brand-primary rounded-xl flex items-center justify-center">
+                         <Target size={20} />
+                      </div>
+                      <div>
+                         <h5 className="font-bold text-gray-900">{subjects.find(s => s.id === sim.subjectId)?.name || 'Geral'}</h5>
+                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{sim.count} questões • {Math.round(sim.duration / 60)}m</p>
+                      </div>
+                   </div>
+                   <div className="text-right">
+                      <div className="text-lg font-black text-brand-primary">{sim.score}%</div>
+                      <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Score</div>
+                   </div>
+                </div>
+              )) : (
+                <div className="py-20 text-center text-gray-400 text-sm italic">Nenhum simulado realizado ainda.</div>
+              )}
+           </div>
+        </div>
+
+        <div className="bg-white p-10 rounded-[40px] border border-gray-100 shadow-sm space-y-8">
+           <h4 className="text-xl font-bold text-gray-900 tracking-tight">Evolução Diária (Segundos)</h4>
+           <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                 <BarChart data={dailyStats}>
+                    <XAxis dataKey="date" tickFormatter={(v) => v.split('-')[2]} tickLine={false} axisLine={false} tick={{ fontSize: 12, fontWeight: 700, fill: '#9ca3af' }} />
+                    <Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                    <Bar dataKey="studySeconds" name="Segundos" radius={[8, 8, 8, 8]} fill="#ff3b6c" />
+                 </BarChart>
+              </ResponsiveContainer>
+           </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+        <div className="bg-white p-10 rounded-[40px] border border-gray-100 shadow-sm space-y-8">
+           <h4 className="text-xl font-bold text-gray-900 tracking-tight">Desempenho por Disciplina</h4>
+           <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                 <BarChart data={subjectChartData} layout="vertical">
+                    <XAxis type="number" hide />
+                    <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 10, fontWeight: 700, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
+                    <Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
+                    <Bar dataKey="accuracy" name="Precisão %" radius={[0, 8, 8, 0]} barSize={20}>
+                       {subjectChartData.map((entry, index) => (
+                         <Cell key={index} fill={entry.color} />
+                       ))}
+                    </Bar>
+                 </BarChart>
+              </ResponsiveContainer>
+           </div>
+        </div>
+
+        <div className="bg-white p-10 rounded-[40px] border border-gray-100 shadow-sm space-y-6">
+           <div className="flex items-center justify-between">
+              <h4 className="text-xl font-bold text-gray-900 tracking-tight">Foco de Revisão (Mais Erros)</h4>
+              <div className="p-2 bg-red-50 text-red-500 rounded-xl">
+                 <XCircle size={20} />
+              </div>
+           </div>
+           <div className="space-y-3">
+              {subjectChartData.sort((a, b) => a.accuracy - b.accuracy).slice(0, 4).map((sub, idx) => (
+                <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-transparent hover:border-red-100 transition-all">
+                   <div className="flex items-center space-x-3">
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: sub.color }} />
+                      <span className="font-bold text-gray-700 text-sm">{sub.name}</span>
+                   </div>
+                   <div className="text-xs font-black text-red-500 bg-red-50 px-3 py-1 rounded-full">
+                      {100 - sub.accuracy}% Erros
+                   </div>
+                </div>
+              ))}
+           </div>
+        </div>
+      </div>
+
+      <div className="bg-gray-900 p-12 rounded-[40px] text-white relative overflow-hidden">
+         <div className="relative z-10 grid grid-cols-1 lg:grid-cols-2 gap-12">
+            <div className="space-y-6">
+               <div className="w-12 h-12 bg-brand-primary rounded-2xl flex items-center justify-center">
+                  <Zap size={24} />
+               </div>
+               <h3 className="text-3xl font-bold tracking-tight">Scudeli AI Insights</h3>
+               <p className="text-white/60 font-medium leading-relaxed">Nossa IA analisou seu histórico e gerou recomendações personalizadas para sua rotina.</p>
+            </div>
+            <div className="space-y-4">
+               {insights.map((insight, idx) => (
+                 <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.1 }}
+                    key={idx} 
+                    className="p-6 bg-white/5 rounded-3xl border border-white/10 flex items-start space-x-4"
+                  >
+                    <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${insight?.type === 'warning' ? 'bg-orange-400' : insight?.type === 'success' ? 'bg-green-400' : 'bg-blue-400'}`} />
+                    <p className="text-sm font-medium">{insight?.text}</p>
+                 </motion.div>
+               ))}
+            </div>
+         </div>
+         <div className="absolute top-0 right-0 w-64 h-64 bg-brand-primary/10 rounded-full blur-[100px]" />
+      </div>
+    </div>
+  );
+};
+
+export default AnalyticsView;

@@ -1,0 +1,6 @@
+{
+  "name": "Scudeli Study",
+  "description": "Uma plataforma de estudos completa e minimalista para estudantes de medicina, com flashcards, notas, agenda e banco de questões.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}

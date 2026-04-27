@@ -1,0 +1,257 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isDataOwner() {
+      return isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function isIncomingOwner() {
+      return isSignedIn() && request.resource.data.userId == request.auth.uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'email']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.email is string && data.email.size() > 0 && data.email.size() <= 255;
+    }
+
+    function isValidSubject(data) {
+      return data.keys().hasAll(['name', 'color', 'userId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.color is string && data.userId == request.auth.uid;
+    }
+
+    function isValidFlashcard(data) {
+      return data.keys().hasAll(['front', 'back', 'userId', 'subjectId']) &&
+             data.front is string && data.front.size() <= 5000 &&
+             data.back is string && data.back.size() <= 5000 &&
+             data.userId == request.auth.uid &&
+             isValidId(data.subjectId);
+    }
+
+    function isValidNote(data) {
+      return data.keys().hasAll(['title', 'userId', 'subjectId']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.userId == request.auth.uid &&
+             isValidId(data.subjectId);
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'userId', 'status']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.userId == request.auth.uid;
+    }
+
+    function isValidMaterial(data) {
+      return data.keys().hasAll(['title', 'type', 'url', 'userId', 'subjectId']) &&
+             data.title is string && data.title.size() <= 255 &&
+             data.userId == request.auth.uid &&
+             data.type in ['pdf', 'docx', 'image'];
+    }
+
+    function isValidQuestion(data) {
+      return data.keys().hasAll(['text', 'options', 'answerIndex', 'userId', 'subjectId']) &&
+             data.text is string && data.text.size() <= 2000 &&
+             data.userId == request.auth.uid;
+    }
+
+    function isValidErrorLog(data) {
+      return data.keys().hasAll(['userId', 'questionId', 'answeredAt', 'wrongOptionIndex', 'correctOptionIndex', 'subjectId']) &&
+             data.userId == request.auth.uid &&
+             isValidId(data.questionId) &&
+             isValidId(data.subjectId) &&
+             (!data.keys().contains('isLearned') || data.isLearned is bool);
+    }
+
+    function isValidAnalytics(data) {
+      return data.keys().hasAll(['userId', 'date', 'studySeconds', 'questionsAttempted', 'questionsCorrect', 'subjectStats']) &&
+             data.userId == request.auth.uid &&
+             data.date is string &&
+             data.studySeconds is number;
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll(['userId', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             (data.keys().hasAny(['content']) || data.keys().hasAny(['imageUrl'])) &&
+             (!data.keys().hasAny(['textContent']) || data.textContent is string) &&
+             (!data.keys().hasAny(['imageUrl']) || data.imageUrl == null || data.imageUrl is string) &&
+             (!data.keys().hasAny(['musicLink']) || data.musicLink == null || data.musicLink is string);
+    }
+
+    // --- Collection Routes ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'college', 'semester', 'bio', 'streak', 'lastStudyDate', 'totalStudyTime'])
+      );
+    }
+
+    match /subjects/{subjectId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidSubject(incoming()) && isValidId(subjectId);
+      allow update: if isDataOwner() && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'color'])
+      );
+      allow delete: if isDataOwner();
+    }
+
+    match /flashcards/{cardId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidFlashcard(incoming()) && isValidId(cardId);
+      allow update: if isDataOwner() && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['front', 'back', 'nextReview', 'interval', 'easiness', 'repetitions', 'subjectId', 'tags'])
+      );
+      allow delete: if isDataOwner();
+    }
+
+    match /notes/{noteId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidNote(incoming()) && isValidId(noteId);
+      allow update: if isDataOwner() && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'subjectId', 'updatedAt', 'tags', 'linkedNoteIds'])
+      );
+      allow delete: if isDataOwner();
+    }
+
+    match /tasks/{taskId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidTask(incoming()) && isValidId(taskId);
+      allow update: if isDataOwner() && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'status', 'priority', 'deadline', 'subjectId', 'tags'])
+      );
+      allow delete: if isDataOwner();
+    }
+
+    match /materials/{materialId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidMaterial(incoming()) && isValidId(materialId);
+      allow update: if isDataOwner() && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'tags', 'summary'])
+      );
+      allow delete: if isDataOwner();
+    }
+
+    match /questions/{questionId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidQuestion(incoming()) && isValidId(questionId);
+      allow update: if isDataOwner() && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['text', 'options', 'answerIndex', 'explanation', 'difficulty', 'subjectId', 'tags'])
+      );
+      allow delete: if isDataOwner();
+    }
+
+    match /studyPlans/{planId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidId(planId);
+      allow update: if isDataOwner();
+      allow delete: if isDataOwner();
+    }
+
+    match /performanceMetrics/{metricId} {
+      allow list: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidId(metricId);
+    }
+
+    match /studySessions/{sessionId} {
+      allow list: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidId(sessionId);
+      allow delete: if isDataOwner();
+    }
+
+    match /events/{eventId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidId(eventId);
+      allow update: if isDataOwner();
+      allow delete: if isDataOwner();
+    }
+
+    match /errors/{errorId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidErrorLog(incoming()) && isValidId(errorId);
+      allow update: if isDataOwner() && incoming().diff(existing()).affectedKeys().hasOnly(['isLearned']);
+      allow delete: if isDataOwner();
+    }
+
+    match /analytics/{analyticsId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidAnalytics(incoming()) && isValidId(analyticsId);
+      allow update: if isDataOwner() && isValidAnalytics(incoming());
+    }
+
+    match /simulations/{simulationId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidId(simulationId);
+      allow delete: if isDataOwner();
+    }
+
+    match /tags/{tagId} {
+      allow list: if isDataOwner();
+      allow get: if isDataOwner();
+      allow create: if isIncomingOwner() && isValidId(tagId);
+      allow update: if isDataOwner();
+      allow delete: if isDataOwner();
+    }
+
+    match /posts/{postId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn();
+      allow create: if isIncomingOwner() && isValidPost(incoming()) && isValidId(postId);
+      allow update: if isSignedIn() && (
+        (isDataOwner() && isValidPost(incoming())) || 
+        (incoming().diff(existing()).affectedKeys().hasOnly(['likes', 'likesCount', 'commentsCount']))
+      );
+      allow delete: if isDataOwner();
+    }
+
+    match /comments/{commentId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn();
+      allow create: if isIncomingOwner() && isValidId(commentId);
+      allow update: if isDataOwner() && incoming().diff(existing()).affectedKeys().hasOnly(['content']);
+      allow delete: if isDataOwner();
+    }
+  }
+}

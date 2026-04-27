@@ -1,0 +1,30 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-brand-primary: #ff85a1;
+  --color-brand-light: #fff0f3;
+  --color-brand-bg: #fafafa;
+  --color-brand-accent: #fce4ec;
+  
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+}
+
+@layer base {
+  body {
+    @apply bg-brand-bg text-gray-900 font-sans;
+  }
+}
+
+.app-logo {
+  @apply object-contain transition-all duration-300;
+}
+
+.markdown-body h1 { @apply text-2xl font-bold mb-4; }
+.markdown-body h2 { @apply text-xl font-bold mb-3; }
+.markdown-body p { @apply mb-3 leading-relaxed; }
+.markdown-body ul { @apply list-disc pl-5 mb-3; }
+.markdown-body ol { @apply list-decimal pl-5 mb-3; }
