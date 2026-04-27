@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { AppProvider, useAppContext } from './contexts/AppContext';
-import { 
-  LayoutDashboard, 
-  Layers, 
-  FileText, 
-  CheckSquare, 
-  Calendar, 
-  BrainCircuit, 
-  Timer, 
-  Search, 
+import {
+  LayoutDashboard,
+  Layers,
+  FileText,
+  CheckSquare,
+  Calendar,
+  BrainCircuit,
+  Timer,
+  Search,
   Settings,
   LogOut,
   User as UserIcon,
@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 
 import { motion, AnimatePresence } from 'motion/react';
-import { loginWithGoogle, logout } from './lib/firebase';
+import { loginWithGoogle, logout } from './lib/supabase';
 
 import GlobalSearch from './components/GlobalSearch';
 
@@ -52,8 +52,8 @@ const SidebarItem = ({ icon: Icon, label, active, onClick }: any) => (
   <button
     onClick={onClick}
     className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${
-      active 
-        ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' 
+      active
+        ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20'
         : 'text-gray-500 hover:bg-brand-light hover:text-brand-primary'
     }`}
   >
@@ -63,7 +63,7 @@ const SidebarItem = ({ icon: Icon, label, active, onClick }: any) => (
 );
 
 const AppContent = () => {
-  const { user, loading, firebaseUser, notes, flashcards, questions, materials } = useAppContext();
+  const { user, loading, session, notes, flashcards, questions, materials } = useAppContext();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -86,7 +86,7 @@ const AppContent = () => {
     );
   }
 
-  if (!firebaseUser) {
+  if (!session) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-brand-bg p-6">
         <motion.div
@@ -98,7 +98,7 @@ const AppContent = () => {
             <h1 className="text-4xl font-bold text-gray-900 tracking-tight">Scudeli Study</h1>
             <p className="text-gray-500">Plataforma Inteligente de Medicina</p>
           </div>
-          
+
           <div className="py-4">
              <div className="w-24 h-24 flex items-center justify-center mx-auto mb-4">
                 <img src="/logomanu.png" alt="Scudeli Study Logo" className="app-logo h-full" referrerPolicy="no-referrer" />
@@ -112,7 +112,7 @@ const AppContent = () => {
           >
             <span>Entrar na plataforma</span>
           </button>
-          
+
           <p className="text-xs text-gray-400">Desenvolvido para máxima escalabilidade e organização.</p>
         </motion.div>
       </div>
@@ -138,6 +138,9 @@ const AppContent = () => {
       default: return <Dashboard />;
     }
   };
+
+  const avatarUrl = session.user.user_metadata?.avatar_url;
+  const displayName = user?.name || session.user.user_metadata?.full_name || 'Estudante';
 
   return (
     <div className="flex h-screen bg-brand-bg overflow-hidden text-gray-900">
@@ -192,18 +195,18 @@ const AppContent = () => {
             <div className="p-4 border-t border-gray-100 space-y-2">
               <div className="flex items-center space-x-3 px-4 py-3 rounded-2xl bg-gray-50 border border-gray-100">
                 <div className="w-10 h-10 rounded-xl bg-brand-primary/10 flex items-center justify-center overflow-hidden shrink-0">
-                  {firebaseUser.photoURL ? (
-                    <img src={firebaseUser.photoURL} alt="Profile" className="w-full h-full object-cover" />
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                   ) : (
                     <UserIcon className="text-brand-primary" size={20} />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-900 truncate">{user?.name || firebaseUser.displayName}</p>
+                  <p className="text-sm font-bold text-gray-900 truncate">{displayName}</p>
                   <p className="text-[10px] text-brand-primary font-black uppercase tracking-widest">Estudante de Med</p>
                 </div>
               </div>
-              <button 
+              <button
                 onClick={logout}
                 className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all font-bold text-sm"
               >
@@ -219,13 +222,13 @@ const AppContent = () => {
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         <header className="h-16 flex items-center justify-between px-8 bg-brand-bg md:bg-transparent absolute top-0 left-0 right-0 z-10 pointer-events-none">
            <div className="pointer-events-auto flex items-center space-x-4">
-              <button 
+              <button
                 onClick={() => setIsSidebarOpen(!isSidebarOpen)}
                 className="p-2 text-gray-500 hover:text-brand-primary transition-colors"
               >
                 {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
               </button>
-              
+
               {!isSidebarOpen && (
                 <div className="h-8 flex items-center space-x-2">
                   <img src="/logomanu.png" alt="Scudeli Study" className="app-logo h-full" referrerPolicy="no-referrer" />
@@ -233,9 +236,9 @@ const AppContent = () => {
                 </div>
               )}
            </div>
-           
+
            <div className="flex items-center space-x-4 pointer-events-auto bg-white/50 backdrop-blur-md px-4 py-1.5 rounded-full border border-gray-100/50">
-              <button 
+              <button
                 onClick={() => setIsSearchOpen(true)}
                 className="flex items-center space-x-2 text-gray-400 hover:text-brand-primary transition-all"
               >
@@ -250,9 +253,9 @@ const AppContent = () => {
         </div>
       </main>
 
-      <GlobalSearch 
-        isOpen={isSearchOpen} 
-        onClose={() => setIsSearchOpen(false)} 
+      <GlobalSearch
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
         onNavigate={handleNavigate}
       />
     </div>

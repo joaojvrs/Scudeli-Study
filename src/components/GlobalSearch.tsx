@@ -129,7 +129,7 @@ const GlobalSearch = ({ isOpen, onClose, onNavigate }: GlobalSearchProps) => {
                       key={card.id}
                       icon={<BrainCircuit size={18} />}
                       title={card.front}
-                      subtitle={`Próxima revisão: ${new Date(card.nextReview).toLocaleDateString()}`}
+                      subtitle={`Próxima revisão: ${new Date(card.next_review).toLocaleDateString()}`}
                       onClick={() => handleSelect('flashcards', card.id)}
                     />
                   ))}

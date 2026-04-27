@@ -1,57 +1,62 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../contexts/AppContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, where, onSnapshot, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
 import { ErrorLog } from '../types';
-import { 
-  XCircle, 
-  Trash2, 
-  ChevronRight, 
-  Zap, 
+import {
+  XCircle,
+  Trash2,
   AlertCircle,
   Clock,
-  BookOpen,
   Search,
   Brain,
   CheckCircle2
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 
 const ErrorNotebook = () => {
-  const { firebaseUser, subjects } = useAppContext();
+  const { session, subjects } = useAppContext();
   const [errors, setErrors] = useState<ErrorLog[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('all');
 
   useEffect(() => {
-    if (!firebaseUser) return;
-    const q = query(collection(db, 'errors'), where('userId', '==', firebaseUser.uid));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setErrors(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ErrorLog)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'errors'));
-    return () => unsub();
-  }, [firebaseUser]);
+    if (!session) return;
+
+    supabase
+      .from('errors')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .order('answered_at', { ascending: false })
+      .then(({ data }) => setErrors((data || []) as ErrorLog[]));
+
+    const channel = supabase
+      .channel(`errors_${session.user.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'errors', filter: `user_id=eq.${session.user.id}` }, p => {
+        setErrors(prev => [p.new as ErrorLog, ...prev]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'errors', filter: `user_id=eq.${session.user.id}` }, p => {
+        setErrors(prev => prev.map(e => e.id === (p.new as ErrorLog).id ? p.new as ErrorLog : e));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'errors', filter: `user_id=eq.${session.user.id}` }, p => {
+        setErrors(prev => prev.filter(e => e.id !== (p.old as { id: string }).id));
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [session]);
 
   const removeError = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'errors', id));
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `errors/${id}`);
-    }
+    const { error } = await supabase.from('errors').delete().eq('id', id);
+    if (error) handleSupabaseError(error, OperationType.DELETE, `errors/${id}`);
   };
 
   const toggleLearned = async (id: string, currentStatus: boolean) => {
-    try {
-      await updateDoc(doc(db, 'errors', id), {
-        isLearned: !currentStatus
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `errors/${id}`);
-    }
+    const { error } = await supabase.from('errors').update({ is_learned: !currentStatus }).eq('id', id);
+    if (error) handleSupabaseError(error, OperationType.UPDATE, `errors/${id}`);
   };
 
   const filteredErrors = errors.filter(e => {
-    const matchSubject = selectedSubject === 'all' || e.subjectId === selectedSubject;
+    const matchSubject = selectedSubject === 'all' || e.subject_id === selectedSubject;
     const matchSearch = e.context?.toLowerCase().includes(searchTerm.toLowerCase());
     return matchSubject && matchSearch;
   });
@@ -74,7 +79,6 @@ const ErrorNotebook = () => {
         </div>
       </header>
 
-      {/* Filters */}
       <div className="flex flex-wrap gap-4">
         <div className="flex-1 min-w-[300px] relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
@@ -108,11 +112,11 @@ const ErrorNotebook = () => {
             <div className="flex-1 space-y-4">
               <div className="flex items-center space-x-3">
                 <span className="text-[10px] font-black px-3 py-1 bg-gray-50 text-gray-400 rounded-full uppercase tracking-[0.2em]">
-                  {subjects.find(s => s.id === error.subjectId)?.name || 'Geral'}
+                  {subjects.find(s => s.id === error.subject_id)?.name || 'Geral'}
                 </span>
                 <span className="flex items-center space-x-1 text-[10px] font-black text-gray-300 uppercase tracking-widest">
                   <Clock size={12} />
-                  <span>{new Date(error.answeredAt).toLocaleDateString()}</span>
+                  <span>{new Date(error.answered_at).toLocaleDateString()}</span>
                 </span>
               </div>
               <p className="text-lg font-bold text-gray-900 leading-relaxed font-montserrat">
@@ -121,32 +125,32 @@ const ErrorNotebook = () => {
               <div className="flex flex-wrap gap-3">
                  <div className="flex items-center space-x-3 px-4 py-2 bg-red-50 rounded-xl border border-red-100">
                     <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">Opção Errada selecionada:</span>
-                    <span className="text-sm font-bold text-red-700">{error.wrongOptionIndex + 1}</span>
+                    <span className="text-sm font-bold text-red-700">{error.wrong_option_index + 1}</span>
                  </div>
                  <div className="flex items-center space-x-3 px-4 py-2 bg-green-50 rounded-xl border border-green-100">
                     <span className="text-[10px] font-black text-green-500 uppercase tracking-widest">Gabarito Correto:</span>
-                    <span className="text-sm font-bold text-green-700">{error.correctOptionIndex + 1}</span>
+                    <span className="text-sm font-bold text-green-700">{error.correct_option_index + 1}</span>
                  </div>
               </div>
             </div>
-            
+
             <div className="flex items-center space-x-4">
-               <button 
-                onClick={() => toggleLearned(error.id, !!error.isLearned)}
+               <button
+                onClick={() => toggleLearned(error.id, !!error.is_learned)}
                 className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
-                  error.isLearned ? 'bg-green-50 text-green-500' : 'bg-gray-50 text-gray-300 hover:text-green-500 hover:bg-green-50'
+                  error.is_learned ? 'bg-green-50 text-green-500' : 'bg-gray-50 text-gray-300 hover:text-green-500 hover:bg-green-50'
                 }`}
-                title={error.isLearned ? "Marcar como pendente" : "Marcar como aprendido"}
+                title={error.is_learned ? "Marcar como pendente" : "Marcar como aprendido"}
                >
                  <CheckCircle2 size={20} />
                </button>
-               <button 
+               <button
                 className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-300 hover:text-brand-primary hover:bg-brand-light transition-all"
                 title="Criar Flashcard deste erro"
                >
                  <Brain size={20} />
                </button>
-               <button 
+               <button
                 onClick={() => removeError(error.id)}
                 className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
                >

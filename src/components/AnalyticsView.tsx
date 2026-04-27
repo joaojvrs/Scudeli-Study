@@ -1,87 +1,89 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
 import { useAppContext } from '../contexts/AppContext';
-import { Analytics, Simulation } from '../types';
-import { 
-  TrendingUp, 
-  Clock, 
-  Target, 
+import { Analytics, Simulation, SubjectStats } from '../types';
+import {
+  TrendingUp,
+  Clock,
+  Target,
   Award,
-  ChevronUp,
-  ChevronDown,
   Brain,
   Zap,
   BarChart2,
   XCircle
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  ResponsiveContainer, 
-  Cell,
-  PieChart,
-  Pie
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  Cell
 } from 'recharts';
 
 const AnalyticsView = () => {
-  const { firebaseUser, subjects } = useAppContext();
+  const { session, subjects } = useAppContext();
   const [dailyStats, setDailyStats] = useState<Analytics[]>([]);
   const [simulations, setSimulations] = useState<Simulation[]>([]);
+  const [subjectStatsData, setSubjectStatsData] = useState<SubjectStats[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!firebaseUser) return;
-    
-    // Daily Stats
-    const q = query(
-      collection(db, 'analytics'), 
-      where('userId', '==', firebaseUser.uid),
-      orderBy('date', 'desc'),
-      limit(10)
-    );
-    const unsub = onSnapshot(q, (snapshot) => {
-      setDailyStats(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Analytics)).reverse());
+    if (!session) return;
+    const uid = session.user.id;
+
+    const fetchData = async () => {
+      const [
+        { data: analyticsData },
+        { data: simsData },
+        { data: statsData },
+      ] = await Promise.all([
+        supabase
+          .from('analytics')
+          .select('*')
+          .eq('user_id', uid)
+          .order('date', { ascending: false })
+          .limit(10),
+        supabase
+          .from('simulations')
+          .select('*')
+          .eq('user_id', uid)
+          .order('created_at', { ascending: false })
+          .limit(5),
+        supabase
+          .from('subject_stats')
+          .select('*')
+          .eq('user_id', uid),
+      ]);
+
+      setDailyStats(((analyticsData || []) as Analytics[]).reverse());
+      setSimulations((simsData || []) as Simulation[]);
+      setSubjectStatsData((statsData || []) as SubjectStats[]);
       setLoading(false);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'analytics'));
-
-    // Simulations
-    const qSims = query(
-      collection(db, 'simulations'),
-      where('userId', '==', firebaseUser.uid),
-      orderBy('createdAt', 'desc'),
-      limit(5)
-    );
-    const unsubSims = onSnapshot(qSims, (snapshot) => {
-      setSimulations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Simulation)));
-    });
-
-    return () => {
-      unsub();
-      unsubSims();
     };
-  }, [firebaseUser]);
 
-  const totalStudyTime = dailyStats.reduce((acc, curr) => acc + curr.studySeconds, 0);
-  const totalQuestions = dailyStats.reduce((acc, curr) => acc + curr.questionsAttempted, 0);
-  const totalCorrect = dailyStats.reduce((acc, curr) => acc + curr.questionsCorrect, 0);
+    fetchData();
+  }, [session]);
+
+  const totalStudyTime = dailyStats.reduce((acc, curr) => acc + (curr.study_seconds || 0), 0);
+  const totalQuestions = dailyStats.reduce((acc, curr) => acc + (curr.questions_attempted || 0), 0);
+  const totalCorrect = dailyStats.reduce((acc, curr) => acc + (curr.questions_correct || 0), 0);
   const accuracy = totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
-  const avgTimePerQuestion = totalQuestions > 0 ? Math.round((totalStudyTime / totalQuestions)) : 0;
+  const avgTimePerQuestion = totalQuestions > 0 ? Math.round(totalStudyTime / totalQuestions) : 0;
 
   const subjectChartData = subjects.map(sub => {
-    let total = 0;
-    let correct = 0;
-    dailyStats.forEach(day => {
-      if (day.subjectStats && day.subjectStats[sub.id]) {
-        total += day.subjectStats[sub.id].total;
-        correct += day.subjectStats[sub.id].correct;
-      }
-    });
-    return { name: sub.name, total, correct, accuracy: total > 0 ? Math.round((correct / total) * 100) : 0, color: sub.color };
+    const stats = subjectStatsData.filter(s => s.subject_id === sub.id);
+    const total = stats.reduce((acc, s) => acc + (s.total || 0), 0);
+    const correct = stats.reduce((acc, s) => acc + (s.correct || 0), 0);
+    return {
+      name: sub.name,
+      total,
+      correct,
+      accuracy: total > 0 ? Math.round((correct / total) * 100) : 0,
+      color: sub.color,
+    };
   }).filter(s => s.total > 0);
 
   const insights = [
@@ -154,7 +156,7 @@ const AnalyticsView = () => {
                          <Target size={20} />
                       </div>
                       <div>
-                         <h5 className="font-bold text-gray-900">{subjects.find(s => s.id === sim.subjectId)?.name || 'Geral'}</h5>
+                         <h5 className="font-bold text-gray-900">{subjects.find(s => s.id === sim.subject_id)?.name || 'Geral'}</h5>
                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{sim.count} questões • {Math.round(sim.duration / 60)}m</p>
                       </div>
                    </div>
@@ -176,7 +178,7 @@ const AnalyticsView = () => {
                  <BarChart data={dailyStats}>
                     <XAxis dataKey="date" tickFormatter={(v) => v.split('-')[2]} tickLine={false} axisLine={false} tick={{ fontSize: 12, fontWeight: 700, fill: '#9ca3af' }} />
                     <Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} />
-                    <Bar dataKey="studySeconds" name="Segundos" radius={[8, 8, 8, 8]} fill="#ff3b6c" />
+                    <Bar dataKey="study_seconds" name="Segundos" radius={[8, 8, 8, 8]} fill="#ff3b6c" />
                  </BarChart>
               </ResponsiveContainer>
            </div>
@@ -236,11 +238,11 @@ const AnalyticsView = () => {
             </div>
             <div className="space-y-4">
                {insights.map((insight, idx) => (
-                 <motion.div 
+                 <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: idx * 0.1 }}
-                    key={idx} 
+                    key={idx}
                     className="p-6 bg-white/5 rounded-3xl border border-white/10 flex items-start space-x-4"
                   >
                     <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${insight?.type === 'warning' ? 'bg-orange-400' : insight?.type === 'success' ? 'bg-green-400' : 'bg-blue-400'}`} />

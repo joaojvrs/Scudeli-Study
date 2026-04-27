@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(if \\(Test-Path \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\"\\) { & \"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" --version } elseif \\(Test-Path \"$env:APPDATA\\\\npm\\\\npm.cmd\"\\) { & \"$env:APPDATA\\\\npm\\\\npm.cmd\" --version } else { \"npm not found in standard locations\" })",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Users/Cb90173/AppData/Roaming/**)",
+      "Read(//c/Users/Cb90173/**)",
+      "Bash('/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Microsoft/VisualStudio/NodeJs/node.exe' '/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Microsoft/VisualStudio/NodeJs/node_modules/.bin/npm' --version)",
+      "Bash(\"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Microsoft/VisualStudio/NodeJs/node.exe\" \"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Microsoft/VisualStudio/NodeJs/node_modules/npm/bin/npm-cli.js\" --version)"
+    ]
+  }
+}

@@ -1,70 +1,44 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
 import { useAppContext } from '../contexts/AppContext';
-import { Flashcard, ErrorLog } from '../types';
-import { 
-  RotateCcw, 
-  Brain, 
-  XCircle, 
-  ChevronRight, 
-  Zap, 
-  CheckCircle2,
-  CalendarDays,
-  Target
+import { ErrorLog } from '../types';
+import {
+  RotateCcw,
+  Brain,
+  XCircle,
+  ChevronRight,
+  Zap
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 
 const DailyReview = () => {
-  const { firebaseUser, subjects } = useAppContext();
-  const [reviewQueue, setReviewQueue] = useState<{ id: string; type: 'flashcard' | 'error'; data: any }[]>([]);
+  const { session, subjects, flashcards } = useAppContext();
+  const [errors, setErrors] = useState<ErrorLog[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!firebaseUser) return;
+    if (!session) return;
 
-    // 1. Fetch Due Flashcards
-    const flashQ = query(
-      collection(db, 'flashcards'), 
-      where('userId', '==', firebaseUser.uid),
-      where('nextReview', '<=', new Date().toISOString())
-    );
-
-    // 2. Fetch Recent Errors (unlearned)
-    const errorQ = query(
-      collection(db, 'errors'),
-      where('userId', '==', firebaseUser.uid),
-      where('isLearned', '!=', true),
-      orderBy('isLearned'),
-      orderBy('answeredAt', 'desc'),
-      limit(10)
-    );
-
-    const unsubFlash = onSnapshot(flashQ, (snapshot) => {
-      const cards = snapshot.docs.map(doc => ({ id: doc.id, type: 'flashcard' as const, data: doc.data() }));
-      updateQueue(cards, 'flashcard');
-    });
-
-    const unsubError = onSnapshot(errorQ, (snapshot) => {
-      const errors = snapshot.docs.map(doc => ({ id: doc.id, type: 'error' as const, data: doc.data() }));
-      updateQueue(errors, 'error');
-    });
-
-    return () => { unsubFlash(); unsubError(); };
-  }, [firebaseUser]);
-
-  const updateQueue = (items: any[], type: 'flashcard' | 'error') => {
-    setReviewQueue(prev => {
-      const otherType = prev.filter(i => i.type !== type);
-      const combined = [...otherType, ...items];
-      // Shuffle slightly or sort by urgency
-      return combined.sort((a, b) => {
-        if (a.type === 'error' && b.type === 'flashcard') return -1;
-        return 0;
+    supabase
+      .from('errors')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .or('is_learned.eq.false,is_learned.is.null')
+      .order('answered_at', { ascending: false })
+      .limit(10)
+      .then(({ data }) => {
+        setErrors((data || []) as ErrorLog[]);
+        setLoading(false);
       });
-    });
-    setLoading(false);
-  };
+  }, [session]);
+
+  const now = new Date();
+  const dueFlashcards = flashcards.filter(c => new Date(c.next_review) <= now);
+
+  const reviewQueue = [
+    ...errors.map(e => ({ id: e.id, type: 'error' as const, data: e })),
+    ...dueFlashcards.map(c => ({ id: c.id, type: 'flashcard' as const, data: c })),
+  ];
 
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20">
@@ -89,7 +63,6 @@ const DailyReview = () => {
            </button>
         </div>
 
-        {/* Decor */}
         <div className="absolute right-0 top-0 w-32 h-32 bg-brand-primary/5 rounded-full -translate-y-1/2 translate-x-1/2" />
       </header>
 
@@ -101,7 +74,7 @@ const DailyReview = () => {
            </div>
            <div className="space-y-4">
               {reviewQueue.filter(i => i.type === 'flashcard').length > 0 ? (
-                reviewQueue.filter(i => i.type === 'flashcard').slice(0, 3).map((item, idx) => (
+                reviewQueue.filter(i => i.type === 'flashcard').slice(0, 3).map((item) => (
                   <div key={item.id} className="p-4 bg-gray-50 rounded-2xl flex items-center justify-between">
                     <span className="text-sm font-bold text-gray-700 truncate max-w-[200px]">{item.data.front}</span>
                     <ChevronRight size={16} className="text-gray-300" />
@@ -120,7 +93,7 @@ const DailyReview = () => {
            </div>
            <div className="space-y-4">
               {reviewQueue.filter(i => i.type === 'error').length > 0 ? (
-                reviewQueue.filter(i => i.type === 'error').slice(0, 3).map((item, idx) => (
+                reviewQueue.filter(i => i.type === 'error').slice(0, 3).map((item) => (
                   <div key={item.id} className="p-4 bg-red-50/50 rounded-2xl flex items-center justify-between">
                     <span className="text-sm font-bold text-gray-700 truncate max-w-[200px]">{item.data.context}</span>
                     <span className="text-[8px] font-black text-red-500 uppercase tracking-widest">Pendente</span>

@@ -1,12 +1,11 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { collection, query, where, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { User, Subject, Task, Note, Flashcard, Question, Material, Event, GlobalTag, Post, Comment } from '../types';
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
+import { User, Subject, Task, Note, Flashcard, Question, Material, Event, GlobalTag, Post } from '../types';
 
 interface AppContextType {
   user: User | null;
-  firebaseUser: FirebaseUser | null;
+  session: Session | null;
   loading: boolean;
   subjects: Subject[];
   tasks: Task[];
@@ -23,7 +22,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -37,121 +36,164 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [posts, setPosts] = useState<Post[]>([]);
 
   const refreshUserData = async () => {
-    if (!firebaseUser) return;
-    try {
-      const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-      if (userDoc.exists()) {
-        setUser({ id: userDoc.id, ...userDoc.data() } as User);
-      } else {
-        const newUser: User = {
-          id: firebaseUser.uid,
-          name: firebaseUser.displayName || 'Estudante',
-          email: firebaseUser.email || '',
-          createdAt: new Date().toISOString(),
-          streak: 0,
-          totalStudyTime: 0,
-        };
-        await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
-        setUser(newUser);
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    if (!currentSession) return;
+    const uid = currentSession.user.id;
+
+    const { data: userData } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', uid)
+      .maybeSingle();
+
+    if (userData) {
+      setUser(userData as User);
+    } else {
+      const newUser: User = {
+        id: uid,
+        name: currentSession.user.user_metadata?.full_name || 'Estudante',
+        email: currentSession.user.email || '',
+        created_at: new Date().toISOString(),
+        streak: 0,
+        total_study_time: 0,
+      };
+      await supabase.from('users').insert(newUser);
+      setUser(newUser);
     }
   };
 
+  const loadUserData = async (uid: string) => {
+    const [
+      { data: subjectsData },
+      { data: tasksData },
+      { data: notesData },
+      { data: cardsData },
+      { data: questionsData },
+      { data: materialsData },
+      { data: eventsData },
+      { data: tagsData },
+      { data: postsData },
+    ] = await Promise.all([
+      supabase.from('subjects').select('*').eq('user_id', uid),
+      supabase.from('tasks').select('*').eq('user_id', uid),
+      supabase.from('notes').select('*').eq('user_id', uid),
+      supabase.from('flashcards').select('*').eq('user_id', uid),
+      supabase.from('questions').select('*').eq('user_id', uid),
+      supabase.from('materials').select('*').eq('user_id', uid),
+      supabase.from('events').select('*').eq('user_id', uid),
+      supabase.from('tags').select('*').eq('user_id', uid),
+      supabase.from('posts').select('*').order('created_at', { ascending: false }),
+    ]);
+
+    setSubjects((subjectsData || []) as Subject[]);
+    setTasks((tasksData || []) as Task[]);
+    setNotes((notesData || []) as Note[]);
+    setFlashcards((cardsData || []) as Flashcard[]);
+    setQuestions((questionsData || []) as Question[]);
+    setMaterials((materialsData || []) as Material[]);
+    setEvents((eventsData || []) as Event[]);
+    setTags((tagsData || []) as GlobalTag[]);
+    setPosts((postsData || []) as Post[]);
+  };
+
+  const clearUserData = () => {
+    setUser(null);
+    setSubjects([]);
+    setTasks([]);
+    setNotes([]);
+    setFlashcards([]);
+    setQuestions([]);
+    setMaterials([]);
+    setEvents([]);
+    setTags([]);
+    setPosts([]);
+  };
+
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-      setFirebaseUser(u);
-      if (!u) {
-        setUser(null);
-        setSubjects([]);
-        setTasks([]);
-        setNotes([]);
-        setFlashcards([]);
-        setQuestions([]);
-        setMaterials([]);
-        setEvents([]);
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      if (!s) {
         setLoading(false);
-      } else {
-        refreshUserData().finally(() => setLoading(false));
       }
     });
 
-    return () => unsubscribeAuth();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+      if (!s) {
+        clearUserData();
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!firebaseUser) return;
+    if (!session) return;
+    const uid = session.user.id;
 
-    const qSubjects = query(collection(db, 'subjects'), where('userId', '==', firebaseUser.uid));
-    const unsubSubjects = onSnapshot(qSubjects, (snapshot) => {
-      setSubjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Subject)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'subjects'));
+    const setup = async () => {
+      await refreshUserData();
+      await loadUserData(uid);
+      setLoading(false);
+    };
+    setup();
 
-    const qTasks = query(collection(db, 'tasks'), where('userId', '==', firebaseUser.uid));
-    const unsubTasks = onSnapshot(qTasks, (snapshot) => {
-      setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'tasks'));
+    const makeChannel = <T extends { id: string }>(
+      table: string,
+      setState: React.Dispatch<React.SetStateAction<T[]>>,
+      filter?: string
+    ) => {
+      const opts: any = { event: '*', schema: 'public', table };
+      if (filter) opts.filter = filter;
 
-    const qNotes = query(collection(db, 'notes'), where('userId', '==', firebaseUser.uid));
-    const unsubNotes = onSnapshot(qNotes, (snapshot) => {
-      setNotes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Note)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'notes'));
+      return supabase
+        .channel(`${table}_${uid}_${Math.random()}`)
+        .on('postgres_changes', { ...opts, event: 'INSERT' }, p => {
+          setState(prev => {
+            const item = p.new as T;
+            if (prev.some(i => i.id === item.id)) return prev;
+            return [...prev, item];
+          });
+        })
+        .on('postgres_changes', { ...opts, event: 'UPDATE' }, p => {
+          setState(prev => prev.map(i => i.id === (p.new as T).id ? p.new as T : i));
+        })
+        .on('postgres_changes', { ...opts, event: 'DELETE' }, p => {
+          setState(prev => prev.filter(i => i.id !== (p.old as { id: string }).id));
+        })
+        .subscribe();
+    };
 
-    const qCards = query(collection(db, 'flashcards'), where('userId', '==', firebaseUser.uid));
-    const unsubCards = onSnapshot(qCards, (snapshot) => {
-      setFlashcards(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Flashcard)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'flashcards'));
-
-    const qQuestions = query(collection(db, 'questions'), where('userId', '==', firebaseUser.uid));
-    const unsubQuestions = onSnapshot(qQuestions, (snapshot) => {
-      setQuestions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Question)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'questions'));
-
-    const qMaterials = query(collection(db, 'materials'), where('userId', '==', firebaseUser.uid));
-    const unsubMaterials = onSnapshot(qMaterials, (snapshot) => {
-      setMaterials(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Material)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'materials'));
-
-    const qEvents = query(collection(db, 'events'), where('userId', '==', firebaseUser.uid));
-    const unsubEvents = onSnapshot(qEvents, (snapshot) => {
-      setEvents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Event)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'events'));
-
-    const qTags = query(collection(db, 'tags'), where('userId', '==', firebaseUser.uid));
-    const unsubTags = onSnapshot(qTags, (snapshot) => {
-      setTags(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as GlobalTag)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'tags'));
-
-    const qPosts = query(collection(db, 'posts'));
-    const unsubPosts = onSnapshot(qPosts, (snapshot) => {
-      const loadedPosts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post));
-      // Robust sorting: prioritize posts with createdAt, fallback to 0
-      loadedPosts.sort((a, b) => {
-        const timeA = a.createdAt?.toMillis?.() || 0;
-        const timeB = b.createdAt?.toMillis?.() || 0;
-        return timeB - timeA;
-      });
-      setPosts(loadedPosts);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'posts'));
+    const userFilter = `user_id=eq.${uid}`;
+    const channels = [
+      makeChannel<Subject>('subjects', setSubjects, userFilter),
+      makeChannel<Task>('tasks', setTasks, userFilter),
+      makeChannel<Note>('notes', setNotes, userFilter),
+      makeChannel<Flashcard>('flashcards', setFlashcards, userFilter),
+      makeChannel<Question>('questions', setQuestions, userFilter),
+      makeChannel<Material>('materials', setMaterials, userFilter),
+      makeChannel<Event>('events', setEvents, userFilter),
+      makeChannel<GlobalTag>('tags', setTags, userFilter),
+      makeChannel<Post>('posts', (action) => {
+        setPosts(prev => {
+          const result = typeof action === 'function' ? action(prev) : action;
+          return [...result].sort((a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+        });
+      }),
+    ];
 
     return () => {
-      unsubSubjects();
-      unsubTasks();
-      unsubNotes();
-      unsubCards();
-      unsubQuestions();
-      unsubMaterials();
-      unsubEvents();
-      unsubTags();
-      unsubPosts();
+      channels.forEach(ch => supabase.removeChannel(ch));
     };
-  }, [firebaseUser]);
+  }, [session?.user.id]);
 
   return (
     <AppContext.Provider value={{
       user,
-      firebaseUser,
+      session,
       loading,
       subjects,
       tasks,
@@ -162,7 +204,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       events,
       tags,
       posts,
-      refreshUserData
+      refreshUserData,
     }}>
       {children}
     </AppContext.Provider>

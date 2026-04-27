@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  CalendarDays, 
-  Target, 
-  Clock, 
-  Sparkles, 
-  ChevronRight, 
-  AlertCircle,
+import {
+  CalendarDays,
+  Target,
+  Sparkles,
   Calendar as CalendarIcon,
   BookOpen,
   CheckCircle2,
@@ -15,64 +12,78 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { useAppContext } from '../contexts/AppContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, where, onSnapshot, addDoc, doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
 import { StudyPlan } from '../types';
 import { geminiService } from '../services/geminiService';
 
 const StudyPlanner = () => {
-  const { firebaseUser, subjects, tasks } = useAppContext();
+  const { session, subjects } = useAppContext();
   const [plans, setPlans] = useState<StudyPlan[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [formData, setFormData] = useState({
     name: 'Simulado Residência 2024',
     examDate: '',
-    availability: 120, // minutes
+    availability: 120,
     targetContent: '',
-    selectedSubjects: [] as string[]
+    selectedSubjects: [] as string[],
   });
 
   useEffect(() => {
-    if (!firebaseUser) return;
-    const q = query(collection(db, 'studyPlans'), where('userId', '==', firebaseUser.uid));
-    return onSnapshot(q, (snapshot) => {
-      setPlans(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StudyPlan)));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'studyPlans'));
-  }, [firebaseUser]);
+    if (!session) return;
+
+    supabase
+      .from('study_plans')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .then(({ data }) => setPlans((data || []) as StudyPlan[]));
+
+    const channel = supabase
+      .channel(`study_plans_${session.user.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'study_plans', filter: `user_id=eq.${session.user.id}` }, p => {
+        setPlans(prev => [...prev, p.new as StudyPlan]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'study_plans', filter: `user_id=eq.${session.user.id}` }, p => {
+        setPlans(prev => prev.map(pl => pl.id === (p.new as StudyPlan).id ? p.new as StudyPlan : pl));
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [session]);
 
   const activePlan = plans[0];
 
   const handleGeneratePlan = async () => {
-    if (!firebaseUser) return;
+    if (!session) return;
     setIsGenerating(true);
-    
+
     const subjectNames = subjects
       .filter(s => formData.selectedSubjects.includes(s.id))
       .map(s => s.name);
 
     try {
       const schedule = await geminiService.generateStudyPlan(
-        formData.examDate, 
-        formData.targetContent || subjectNames.join(', '), 
+        formData.examDate,
+        formData.targetContent || subjectNames.join(', '),
         formData.availability
       );
-      
-      const planData: Omit<StudyPlan, 'id'> = {
-        userId: firebaseUser.uid,
+
+      const planData = {
+        user_id: session.user.id,
         name: formData.name,
-        examDate: formData.examDate,
-        targetContent: formData.targetContent,
-        dailyAvailability: formData.availability,
-        schedule: schedule.map((s: any) => ({ ...s, completed: false })),
-        createdAt: serverTimestamp()
+        exam_date: formData.examDate,
+        target_content: formData.targetContent,
+        daily_availability: formData.availability,
+        schedule: schedule.map((s: Record<string, unknown>) => ({ ...s, completed: false })),
       };
 
       if (activePlan) {
-        await setDoc(doc(db, 'studyPlans', activePlan.id), planData);
+        const { error } = await supabase.from('study_plans').update(planData).eq('id', activePlan.id);
+        if (error) throw error;
       } else {
-        await addDoc(collection(db, 'studyPlans'), planData);
+        const { error } = await supabase.from('study_plans').insert(planData);
+        if (error) throw error;
       }
-      
+
       alert('Plano de estudo gerado com sucesso pela IA!');
     } catch (e) {
       console.error(e);
@@ -85,9 +96,9 @@ const StudyPlanner = () => {
   const toggleSubject = (id: string) => {
     setFormData(prev => ({
       ...prev,
-      selectedSubjects: prev.selectedSubjects.includes(id) 
+      selectedSubjects: prev.selectedSubjects.includes(id)
         ? prev.selectedSubjects.filter(sid => sid !== id)
-        : [...prev.selectedSubjects, id]
+        : [...prev.selectedSubjects, id],
     }));
   };
 
@@ -113,11 +124,11 @@ const StudyPlanner = () => {
                 <Target className="text-brand-primary" size={20} />
                 <span>Configurar Prova</span>
               </h3>
-              
+
               <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Nome do Objetivo</label>
-                  <input 
+                  <input
                     type="text"
                     value={formData.name}
                     onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
@@ -128,7 +139,7 @@ const StudyPlanner = () => {
 
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Data da Prova</label>
-                  <input 
+                  <input
                     type="date"
                     value={formData.examDate}
                     onChange={(e) => setFormData(prev => ({ ...prev, examDate: e.target.value }))}
@@ -138,7 +149,7 @@ const StudyPlanner = () => {
 
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Conteúdo / Foco</label>
-                  <textarea 
+                  <textarea
                     value={formData.targetContent}
                     onChange={(e) => setFormData(prev => ({ ...prev, targetContent: e.target.value }))}
                     placeholder="Quais tópicos você quer priorizar?"
@@ -149,7 +160,7 @@ const StudyPlanner = () => {
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Tempo Diário (minutos)</label>
                   <div className="flex items-center space-x-4">
-                    <input 
+                    <input
                       type="range"
                       min="30"
                       max="480"
@@ -201,7 +212,7 @@ const StudyPlanner = () => {
                    </div>
                    <div>
                       <p className="text-xs text-white/60 font-medium uppercase tracking-widest">Contagem Regressiva</p>
-                      <h4 className="text-xl font-bold">Prova em {Math.ceil((new Date(activePlan.examDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} dias</h4>
+                      <h4 className="text-xl font-bold">Prova em {Math.ceil((new Date(activePlan.exam_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} dias</h4>
                    </div>
                 </div>
                 <div className="pt-4 border-t border-white/10">
@@ -231,7 +242,7 @@ const StudyPlanner = () => {
                           <h4 className="font-bold text-gray-900">Atividades Sugeridas</h4>
                        </div>
                        <ul className="space-y-3">
-                         {day.topics.map((task, tidx) => (
+                         {day.topics.map((task: string, tidx: number) => (
                            <li key={tidx} className="flex items-start space-x-3 group">
                               <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-brand-primary/30 group-hover:bg-brand-primary transition-all" />
                               <span className="text-gray-600 text-sm leading-relaxed">{task}</span>

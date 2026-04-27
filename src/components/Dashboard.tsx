@@ -37,7 +37,7 @@ const Dashboard = () => {
   const { tasks, events, flashcards, subjects, user } = useAppContext();
 
   const todayTasks = tasks.filter(t => t.status !== 'done').slice(0, 4);
-  const pendingCards = flashcards.filter(c => new Date(c.nextReview) <= new Date()).length;
+  const pendingCards = flashcards.filter(c => new Date(c.next_review) <= new Date()).length;
   const upcomingExams = events.filter(e => e.type === 'exam').slice(0, 3);
   const dailyProgress = 65; // Simulated
 
