@@ -20,7 +20,7 @@ const PDF_CONTENT_STYLES = `
   em { font-style: italic !important; }
   u  { text-decoration: underline !important; }
   s  { text-decoration: line-through !important; }
-  img { max-width: 100% !important; border-radius: 8px !important; margin: 8px 0 !important; }
+  img { max-width: 100%; border-radius: 8px !important; margin: 8px 0 !important; display: block !important; height: auto !important; }
 `;
 
 interface StudyNotesProps {
@@ -230,6 +230,25 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
 
     const contentEl = document.createElement('div');
     contentEl.innerHTML = selectedNote.content;
+
+    // Convert all external images to base64 so html2canvas doesn't hit CORS.
+    await Promise.all(
+      Array.from(contentEl.querySelectorAll<HTMLImageElement>('img')).map(async (img) => {
+        if (!img.src || img.src.startsWith('data:')) return;
+        try {
+          const res  = await fetch(img.src, { mode: 'cors', cache: 'force-cache' });
+          const blob = await res.blob();
+          img.src = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror  = reject;
+            reader.readAsDataURL(blob);
+          });
+        } catch {
+          // keep original src — html2canvas useCORS will try as fallback
+        }
+      })
+    );
 
     el.appendChild(titleEl);
     el.appendChild(contentEl);
