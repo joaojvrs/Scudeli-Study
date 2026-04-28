@@ -24,7 +24,7 @@ export interface ErrorLog {
   answered_at: string;
   wrong_option_index: number;
   correct_option_index: number;
-  subject_id: string;
+  subject_id: string | null;
   context?: string;
   is_learned?: boolean;
 }
@@ -68,7 +68,7 @@ export interface Flashcard {
   id: string;
   front: string;
   back: string;
-  subject_id: string;
+  subject_id: string | null;
   user_id: string;
   next_review: string;
   interval: number;
@@ -81,7 +81,7 @@ export interface Note {
   id: string;
   title: string;
   content: string;
-  subject_id: string;
+  subject_id: string | null;
   user_id: string;
   updated_at: string;
   tags: string[];
@@ -95,7 +95,7 @@ export interface Task {
   priority: TaskPriority;
   deadline?: string;
   user_id: string;
-  subject_id: string;
+  subject_id: string | null;
   tags: string[];
 }
 
@@ -106,7 +106,7 @@ export interface Event {
   start: string;
   end: string;
   user_id: string;
-  subject_id: string;
+  subject_id: string | null;
 }
 
 export enum QuestionType {
@@ -121,7 +121,7 @@ export interface Question {
   options: string[];
   answerIndex: number;
   explanation?: string;
-  subject_id: string;
+  subject_id: string | null;
   user_id: string;
   difficulty: 'easy' | 'medium' | 'hard';
   tags: string[];
@@ -145,7 +145,7 @@ export interface Material {
   title: string;
   type: 'pdf' | 'docx' | 'image';
   url: string;
-  subject_id: string;
+  subject_id: string | null;
   user_id: string;
   created_at: string;
   tags: string[];

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useAppContext } from '../contexts/AppContext';
+import logoManu from '../../assets/logomanu.jpeg';
 import { motion } from 'motion/react';
 import { 
   CheckCircle2, 
@@ -55,8 +56,8 @@ const Dashboard = () => {
     <div className="max-w-7xl mx-auto space-y-10 pb-20">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="flex items-center space-x-4">
-          <div className="w-16 h-16 flex items-center justify-center shrink-0">
-            <img src="/logomanu.png" alt="Logo" className="app-logo h-full" referrerPolicy="no-referrer" />
+          <div className="w-24 h-24 flex items-center justify-center shrink-0">
+            <img src={logoManu} alt="Logo" className="app-logo h-full w-full object-contain" />
           </div>
           <div className="space-y-1">
             <h2 className="text-4xl font-bold text-gray-900 tracking-tight">

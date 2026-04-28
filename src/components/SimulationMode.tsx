@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../contexts/AppContext';
+import logoManu from '../../assets/logomanu.jpeg';
 import { supabase, handleSupabaseError, OperationType, trackAnalytics } from '../lib/supabase';
 import { Question, Simulation } from '../types';
 import { 
@@ -139,8 +140,8 @@ const SimulationMode = ({ onExit }: { onExit: () => void }) => {
       >
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center space-x-4">
-            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center overflow-hidden border border-gray-100 shadow-sm">
-              <img src="/logomanu.png" alt="Logo" className="app-logo h-8" referrerPolicy="no-referrer" />
+            <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center overflow-hidden border border-gray-100 shadow-sm">
+              <img src={logoManu} alt="Logo" className="app-logo h-full w-full object-contain" />
             </div>
             <div>
               <h3 className="text-2xl font-bold">Configurar Simulado</h3>

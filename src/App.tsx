@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { AppProvider, useAppContext } from './contexts/AppContext';
-import { 
-  LayoutDashboard, 
-  Layers, 
-  FileText, 
-  CheckSquare, 
-  Calendar, 
-  BrainCircuit, 
-  Timer, 
-  Search, 
+import logoManu from '../assets/logomanu.jpeg';
+import {
+  LayoutDashboard,
+  Layers,
+  FileText,
+  CheckSquare,
+  Calendar,
+  BrainCircuit,
+  Timer,
+  Search,
   Settings,
   LogOut,
   User as UserIcon,
@@ -19,11 +20,11 @@ import {
   BookOpen,
   CalendarDays,
   Target,
-  Zap,
   TrendingUp,
   RotateCcw,
   MessageSquare,
-  Users
+  Users,
+  FolderOpen,
 } from 'lucide-react';
 
 import { motion, AnimatePresence } from 'motion/react';
@@ -41,9 +42,9 @@ import AcademicCalendar from './components/AcademicCalendar';
 import QuestionBank from './components/QuestionBank';
 import Pomodoro from './components/Pomodoro';
 import SubjectsModule from './components/SubjectsModule';
+import FoldersModule from './components/FoldersModule';
 import MaterialsCenter from './components/MaterialsCenter';
 import StudyPlanner from './components/StudyPlanner';
-import FocusMode from './components/FocusMode';
 import ErrorNotebook from './components/ErrorNotebook';
 import DailyReview from './components/DailyReview';
 import AnalyticsView from './components/AnalyticsView';
@@ -65,13 +66,12 @@ const SidebarItem = ({ icon: Icon, label, active, onClick }: any) => (
 const AppContent = () => {
   const { user, loading, supabaseUser, notes, flashcards, questions, materials } = useAppContext();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [navSubjectId, setNavSubjectId] = useState<string | undefined>(undefined);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [navTargetId, setNavTargetId] = useState<string | null>(null);
-
-  const handleNavigate = (tab: string, id?: string) => {
+  const handleNavigate = (tab: string, subjectId?: string) => {
+    setNavSubjectId(subjectId);
     setActiveTab(tab);
-    if (id) setNavTargetId(id);
   };
 
   if (loading) {
@@ -94,17 +94,17 @@ const AppContent = () => {
     switch (activeTab) {
       case 'dashboard': return <Dashboard />;
       case 'analytics': return <AnalyticsView />;
-      case 'focus': return <FocusMode defaultTargetId={navTargetId} onComplete={() => setNavTargetId(null)} />;
       case 'review': return <DailyReview />;
       case 'materials': return <MaterialsCenter />;
       case 'errors': return <ErrorNotebook />;
       case 'planner': return <StudyPlanner />;
       case 'flashcards': return <Flashcards />;
-      case 'notes': return <StudyNotes />;
+      case 'notes': return <StudyNotes initialSubjectId={navSubjectId} />;
       case 'questions': return <QuestionBank />;
       case 'tasks': return <TaskManager />;
       case 'calendar': return <AcademicCalendar />;
       case 'subjects': return <SubjectsModule />;
+      case 'folders':  return <FoldersModule onNavigate={(tab, subjectId) => handleNavigate(tab, subjectId)} />;
       default: return <Dashboard />;
     }
   };
@@ -120,9 +120,9 @@ const AppContent = () => {
             exit={{ x: -288 }}
             className="w-72 bg-white border-r border-gray-100 flex flex-col h-full z-20 shadow-sm shrink-0"
           >
-            <div className="p-8 pb-4 flex items-center space-x-3">
-              <div className="w-10 h-10 flex items-center justify-center">
-                <img src="/logomanu.png" alt="Logo" className="app-logo h-full" referrerPolicy="no-referrer" />
+            <div className="p-6 pb-4 flex items-center space-x-3">
+              <div className="w-30 h-30 flex items-center justify-center shrink-0">
+                <img src={logoManu} alt="Logo" className="app-logo h-full w-full object-contain" />
               </div>
               <h1 className="text-lg font-black tracking-tight text-gray-900 uppercase">SCUDELI <span className="text-brand-primary">STUDY</span></h1>
             </div>
@@ -136,7 +136,6 @@ const AppContent = () => {
 
               <div className="mb-4">
                 <p className="px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Treinamento</p>
-                <SidebarItem icon={Zap} label="Modo Foco" active={activeTab === 'focus'} onClick={() => setActiveTab('focus')} />
                 <SidebarItem icon={RotateCcw} label="Revisão Diária" active={activeTab === 'review'} onClick={() => setActiveTab('review')} />
                 <SidebarItem icon={Plus} label="Questões IA" active={activeTab === 'questions'} onClick={() => setActiveTab('questions')} />
               </div>
@@ -154,6 +153,7 @@ const AppContent = () => {
                 <SidebarItem icon={CalendarDays} label="Cronograma" active={activeTab === 'planner'} onClick={() => setActiveTab('planner')} />
                 <SidebarItem icon={CheckSquare} label="Tarefas" active={activeTab === 'tasks'} onClick={() => setActiveTab('tasks')} />
                 <SidebarItem icon={Calendar} label="Agenda" active={activeTab === 'calendar'} onClick={() => setActiveTab('calendar')} />
+                <SidebarItem icon={FolderOpen} label="Pastas" active={activeTab === 'folders'} onClick={() => setActiveTab('folders')} />
                 <SidebarItem icon={Layers} label="Disciplinas" active={activeTab === 'subjects'} onClick={() => setActiveTab('subjects')} />
               </div>
             </div>
@@ -196,8 +196,8 @@ const AppContent = () => {
               </button>
               
               {!isSidebarOpen && (
-                <div className="h-8 flex items-center space-x-2">
-                  <img src="/logomanu.png" alt="Scudeli Study" className="app-logo h-full" referrerPolicy="no-referrer" />
+                <div className="h-10 flex items-center space-x-2">
+                  <img src={logoManu} alt="Scudeli Study" className="app-logo h-full w-auto object-contain" />
                   <span className="text-xs font-black tracking-tighter text-gray-900 uppercase">SCUDELI <span className="text-brand-primary">STUDY</span></span>
                 </div>
               )}

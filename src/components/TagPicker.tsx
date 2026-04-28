@@ -91,6 +91,7 @@ const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
               setShowSuggestions(true);
             }}
             onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();

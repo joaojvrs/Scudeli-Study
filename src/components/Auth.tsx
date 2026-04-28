@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { supabase, signInWithEmail, signUpWithEmail, loginWithGoogle } from '../lib/supabase';
+import logoManu from '../../assets/logomanu.jpeg';
 import { Mail, Lock, User, ArrowRight, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -43,8 +44,8 @@ const Auth = () => {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-             <div className="w-24 h-24 flex items-center justify-center mx-auto">
-                <img src="/logomanu.png" alt="Scudeli Study Logo" className="h-full object-contain" referrerPolicy="no-referrer" />
+             <div className="w-44 h-44 flex items-center justify-center mx-auto">
+                <img src={logoManu} alt="Scudeli Study Logo" className="h-full w-full object-contain" />
              </div>
           </div>
           <h1 className="text-4xl font-bold text-gray-900 tracking-tight">Scudeli Study</h1>
