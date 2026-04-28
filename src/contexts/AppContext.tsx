@@ -160,8 +160,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Real-time listeners
       const channels = [
-        'subjects', 'tasks', 'notes', 'flashcards', 'questions', 'errors', 'materials', 'events', 'tags', 'analytics', 'simulations', 'studyPlans'
-      ].map(table => 
+        'subjects', 'tasks', 'notes', 'flashcards', 'questions', 'errors', 'materials', 'events', 'tags', 'analytics', 'simulations', 'study_plans'
+      ].map(table =>
         supabase
           .channel(`public:${table}`)
           .on('postgres_changes', { event: '*', schema: 'public', table, filter: `user_id=eq.${supabaseUser.id}` }, () => {

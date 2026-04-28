@@ -139,12 +139,15 @@ const ToolbarBtn = ({
 
 const Toolbar = ({
   editor, onExportPDF, exporting, onImageClick, imageUploading,
+  currentFontFamily, currentFontSize,
 }: {
   editor: Editor;
   onExportPDF: () => void;
   exporting?: boolean;
   onImageClick?: () => void;
   imageUploading?: boolean;
+  currentFontFamily: string;
+  currentFontSize: string;
 }) => (
   <div className="flex flex-wrap items-center gap-0.5 px-4 py-2 border-b border-gray-100 bg-gray-50/60 sticky top-0 z-10">
     <div className="flex items-center gap-0.5 pr-2 border-r border-gray-200 mr-1">
@@ -162,15 +165,14 @@ const Toolbar = ({
     <div className="pr-2 border-r border-gray-200 mr-1">
       <select
         onMouseDown={(e) => e.stopPropagation()}
+        value={currentFontFamily}
         onChange={(e) => {
           if (e.target.value) (editor.chain().focus() as any).setFontFamily(e.target.value).run();
-          e.target.value = '';
         }}
-        defaultValue=""
         className="text-xs bg-white border border-gray-200 rounded-lg px-2 py-1.5 outline-none cursor-pointer text-gray-600"
-        style={{ height: '30px', maxWidth: '130px' }}
+        style={{ height: '30px', maxWidth: '130px', fontFamily: currentFontFamily || undefined }}
       >
-        <option value="" disabled>Fonte</option>
+        <option value="">Fonte</option>
         {FONT_FAMILIES.map(f => (
           <option key={f.value} value={f.value} style={{ fontFamily: f.value }}>{f.label}</option>
         ))}
@@ -180,15 +182,14 @@ const Toolbar = ({
     <div className="pr-2 border-r border-gray-200 mr-1">
       <select
         onMouseDown={(e) => e.stopPropagation()}
+        value={currentFontSize}
         onChange={(e) => {
           if (e.target.value) (editor.chain().focus() as any).setFontSize(e.target.value).run();
-          e.target.value = '';
         }}
-        defaultValue=""
         className="text-xs bg-white border border-gray-200 rounded-lg px-2 py-1.5 outline-none cursor-pointer text-gray-600"
         style={{ height: '30px' }}
       >
-        <option value="" disabled>Tam.</option>
+        <option value="">Tam.</option>
         {FONT_SIZES.map(s => (
           <option key={s} value={s}>{s.replace('px', '')}</option>
         ))}
@@ -274,7 +275,14 @@ interface RichTextEditorProps {
 
 const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUpload }: RichTextEditorProps) => {
   const [imageUploading, setImageUploading] = useState(false);
+  const [currentFontFamily, setCurrentFontFamily] = useState('');
+  const [currentFontSize, setCurrentFontSize] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const syncTextStyle = (ed: Editor) => {
+    setCurrentFontFamily(ed.getAttributes('textStyle').fontFamily ?? '');
+    setCurrentFontSize(ed.getAttributes('textStyle').fontSize ?? '');
+  };
 
   const editor = useEditor({
     extensions: [
@@ -290,14 +298,30 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
     content: content || '<p></p>',
     onUpdate: ({ editor }) => {
       onChange(editor.getHTML());
+      syncTextStyle(editor);
+    },
+    onSelectionUpdate: ({ editor }: { editor: Editor }) => {
+      syncTextStyle(editor);
     },
     editorProps: {
       attributes: {
         class: 'focus:outline-none min-h-[420px] px-6 py-5 text-gray-700 leading-relaxed tiptap-editor',
         spellcheck: 'true',
+        lang: 'pt-BR',
       },
     },
   });
+
+  // Force spellcheck + lang directly on the DOM element — editorProps may be
+  // ignored by some Tiptap versions for non-standard attributes.
+  useEffect(() => {
+    if (!editor) return;
+    const el = editor.view?.dom as HTMLElement | undefined;
+    if (el) {
+      el.setAttribute('spellcheck', 'true');
+      el.setAttribute('lang', 'pt-BR');
+    }
+  }, [editor]);
 
   useEffect(() => {
     if (editor && !editor.isDestroyed && content !== editor.getHTML()) {
@@ -330,6 +354,8 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
         exporting={exporting}
         onImageClick={onImageUpload ? () => fileInputRef.current?.click() : undefined}
         imageUploading={imageUploading}
+        currentFontFamily={currentFontFamily}
+        currentFontSize={currentFontSize}
       />
       <input
         ref={fileInputRef}

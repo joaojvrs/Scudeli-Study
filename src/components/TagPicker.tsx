@@ -9,7 +9,7 @@ interface TagPickerProps {
 }
 
 const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
-  const { tags, supabaseUser } = useAppContext();
+  const { tags, supabaseUser, refreshAllData } = useAppContext();
   const [newTagName, setNewTagName] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -38,6 +38,7 @@ const TagPicker = ({ selectedTags, onChange }: TagPickerProps) => {
       });
       toggleTag(tagName);
       setNewTagName('');
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'tags');
     }

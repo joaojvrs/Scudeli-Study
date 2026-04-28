@@ -18,7 +18,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Task, TaskStatus, TaskPriority } from '../types';
 
 const TaskManager = () => {
-  const { tasks, subjects, supabaseUser, user } = useAppContext();
+  const { tasks, subjects, supabaseUser, user, refreshAllData } = useAppContext();
   const [view, setView] = useState<'list' | 'kanban'>('kanban');
   const [isAdding, setIsAdding] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -90,6 +90,7 @@ const TaskManager = () => {
       setTitle('');
       setDeadline('');
       setIsAdding(false);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'tasks');
     }
@@ -98,6 +99,7 @@ const TaskManager = () => {
   const updateStatus = async (id: string, status: TaskStatus) => {
     try {
       await supabase.from('tasks').update({ status }).eq('id', id);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.UPDATE, `tasks/${id}`);
     }
@@ -105,8 +107,8 @@ const TaskManager = () => {
 
   const deleteTask = async (id: string) => {
     try {
-      // 1. Deletar a tarefa
       await supabase.from('tasks').delete().eq('id', id);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.DELETE, `tasks/${id}`);
     }

@@ -175,6 +175,7 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
     try {
       await supabase.from('notes').delete().eq('id', id);
       if (selectedNoteId === id) setSelectedNoteId(null);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.DELETE, `notes/${id}`);
     }

@@ -17,7 +17,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 const ErrorNotebook = () => {
-  const { supabaseUser, subjects, errors } = useAppContext();
+  const { supabaseUser, subjects, errors, refreshAllData } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('all');
 
@@ -25,6 +25,7 @@ const ErrorNotebook = () => {
   const removeError = async (id: string) => {
     try {
       await supabase.from('errors').delete().eq('id', id);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.DELETE, `errors/${id}`);
     }
@@ -35,6 +36,7 @@ const ErrorNotebook = () => {
       await supabase.from('errors').update({
         is_learned: !currentStatus
       }).eq('id', id);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.UPDATE, `errors/${id}`);
     }

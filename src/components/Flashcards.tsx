@@ -25,7 +25,7 @@ import { Flashcard } from '../types';
 import TagPicker from './TagPicker';
 
 const Flashcards = () => {
-  const { flashcards, subjects, supabaseUser, tags: globalTags } = useAppContext();
+  const { flashcards, subjects, supabaseUser, tags: globalTags, refreshAllData } = useAppContext();
   const [isAdding, setIsAdding] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<string>('all');
@@ -108,6 +108,7 @@ const Flashcards = () => {
       setImageFrontUrl(null);
       setImageBackUrl(null);
       setIsAdding(false);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'flashcards');
     }
@@ -153,6 +154,7 @@ const Flashcards = () => {
         repetitions,
         next_review: nextReviewDate.toISOString()
       }).eq('id', card.id);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.UPDATE, `flashcards/${card.id}`);
     }
@@ -443,7 +445,7 @@ const Flashcards = () => {
                     </span>
                  </div>
                  <button 
-                  onClick={() => supabase.from('flashcards').delete().eq('id', card.id)}
+                  onClick={async () => { await supabase.from('flashcards').delete().eq('id', card.id); await refreshAllData(); }}
                   className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 shadow-sm"
                  >
                    <Trash2 size={14} />

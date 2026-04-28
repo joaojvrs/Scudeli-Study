@@ -29,6 +29,16 @@
 .markdown-body ul { @apply list-disc pl-5 mb-3; }
 .markdown-body ol { @apply list-decimal pl-5 mb-3; }
 
+/* TipTap rich editor — spell check underlines (browser native) */
+.tiptap-editor::spelling-error,
+.tiptap-editor *::spelling-error {
+  text-decoration: red wavy underline !important;
+}
+.tiptap-editor::grammar-error,
+.tiptap-editor *::grammar-error {
+  text-decoration: blue wavy underline !important;
+}
+
 /* TipTap rich editor — Tailwind base resets list-style; restore it here */
 .tiptap-editor ul {
   list-style-type: disc;

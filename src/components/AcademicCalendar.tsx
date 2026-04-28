@@ -17,7 +17,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { EventType, Event } from '../types';
 
 const AcademicCalendar = () => {
-  const { events, subjects, supabaseUser } = useAppContext();
+  const { events, subjects, supabaseUser, refreshAllData } = useAppContext();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isAdding, setIsAdding] = useState(false);
@@ -93,6 +93,7 @@ const AcademicCalendar = () => {
         created_at: new Date().toISOString()
       });
       closeForm();
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'events');
     }
@@ -111,6 +112,7 @@ const AcademicCalendar = () => {
         subject_id: subjectId || 'none',
       }).eq('id', editingEvent.id);
       closeForm();
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.UPDATE, 'events');
     }
@@ -120,6 +122,7 @@ const AcademicCalendar = () => {
     try {
       await supabase.from('events').delete().eq('id', id);
       setConfirmDeleteId(null);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.DELETE, 'events');
     }

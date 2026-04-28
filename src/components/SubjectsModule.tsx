@@ -18,7 +18,7 @@ const COLORS = [
 ];
 
 const SubjectsModule = () => {
-  const { subjects, tasks, notes, flashcards, supabaseUser } = useAppContext();
+  const { subjects, tasks, notes, flashcards, supabaseUser, refreshAllData } = useAppContext();
   const [isAdding, setIsAdding] = useState(false);
   const [name, setName] = useState('');
   const [color, setColor] = useState(COLORS[0]);
@@ -36,6 +36,7 @@ const SubjectsModule = () => {
       });
       setName('');
       setIsAdding(false);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'subjects');
     }
@@ -128,7 +129,7 @@ const SubjectsModule = () => {
                  </div>
                  <div className="flex items-center space-x-2">
                     <button 
-                      onClick={() => supabase.from('subjects').delete().eq('id', subject.id)}
+                      onClick={async () => { await supabase.from('subjects').delete().eq('id', subject.id); await refreshAllData(); }}
                       className="p-2 text-gray-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
                     >
                        <Trash2 size={18} />
