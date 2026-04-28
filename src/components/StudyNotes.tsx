@@ -43,8 +43,13 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
   const [editTitle, setEditTitle] = useState('');
   const [editTags, setEditTags]   = useState<string[]>([]);
 
-  const saveTimeoutRef  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const titleTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saveTimeoutRef      = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const titleTimeoutRef     = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saveStatusTimerRef  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Tracks latest content value so we can flush it synchronously on navigate-back
+  const latestContentRef    = useRef<string>('');
+
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   // Priority: context (authoritative once loaded) → pendingNote (optimistic)
   const selectedNote = selectedNoteId
@@ -112,13 +117,18 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
   };
 
   const handleUpdateNote = useCallback(async (id: string, updates: Record<string, any>) => {
+    setSaveStatus('saving');
     try {
       await supabase.from('notes').update({
         ...updates,
         updated_at: new Date().toISOString(),
       }).eq('id', id);
+      setSaveStatus('saved');
+      clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (err) {
       handleSupabaseError(err, OperationType.UPDATE, `notes/${id}`);
+      setSaveStatus('idle');
     }
   }, []);
 
@@ -138,11 +148,26 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
   }, [selectedNoteId, handleUpdateNote]);
 
   const handleContentChange = useCallback((id: string, html: string) => {
+    latestContentRef.current = html;
     clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
       handleUpdateNote(id, { content: html });
     }, 600);
   }, [handleUpdateNote]);
+
+  const handleGoBack = useCallback(async () => {
+    if (!selectedNoteId) { setSelectedNoteId(null); return; }
+    clearTimeout(titleTimeoutRef.current);
+    clearTimeout(saveTimeoutRef.current);
+    const updates: Record<string, any> = {};
+    if (editTitle !== selectedNote?.title) updates.title = editTitle;
+    if (latestContentRef.current && latestContentRef.current !== selectedNote?.content) {
+      updates.content = latestContentRef.current;
+    }
+    if (Object.keys(updates).length > 0) await handleUpdateNote(selectedNoteId, updates);
+    latestContentRef.current = '';
+    setSelectedNoteId(null);
+  }, [selectedNoteId, editTitle, selectedNote, handleUpdateNote]);
 
   const handleDeleteNote = async (id: string) => {
     if (!confirm('Deseja excluir esta nota?')) return;
@@ -243,13 +268,22 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
       <div className="h-full flex flex-col space-y-4">
         <header className="flex items-center justify-between shrink-0">
           <button
-            onClick={() => setSelectedNoteId(null)}
+            onClick={handleGoBack}
             className="flex items-center space-x-2 text-gray-500 hover:text-brand-primary font-medium"
           >
             <ArrowLeft size={20} />
             <span>Voltar para Notas</span>
           </button>
           <div className="flex items-center space-x-3">
+            {saveStatus === 'saving' && (
+              <span className="flex items-center space-x-1 text-xs text-gray-400 font-medium">
+                <Loader2 size={13} className="animate-spin" />
+                <span>Salvando...</span>
+              </span>
+            )}
+            {saveStatus === 'saved' && (
+              <span className="text-xs text-green-500 font-bold">Salvo ✓</span>
+            )}
             <select
               value={selectedNote.subject_id ?? ''}
               onChange={(e) =>

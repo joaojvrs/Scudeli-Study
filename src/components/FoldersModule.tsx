@@ -79,12 +79,20 @@ const FoldersModule = ({ onNavigate }: FoldersModuleProps) => {
   const [newName, setNewName]               = useState('');
   const [newColor, setNewColor]             = useState(COLORS[0]);
   const [creating, setCreating]             = useState(false);
+  // IDs being deleted — removed from UI immediately (optimistic)
+  const [deletingIds, setDeletingIds]       = useState<string[]>([]);
+
+  // Subjects visible right now = context list minus any pending deletes
+  const visibleSubjects = useMemo(
+    () => subjects.filter(s => !deletingIds.includes(s.id)),
+    [subjects, deletingIds],
+  );
 
   // ── Per-folder item counts (for overview cards and sidebar badges) ──────────
   // Uses isInFolder — null subject_id items are NEVER counted inside a folder.
 
   const folderStats = useMemo(() =>
-    subjects.map(s => ({
+    visibleSubjects.map(s => ({
       ...s,
       counts: {
         notes:      notes.filter(n => isInFolder(n.subject_id, s.id)).length,
@@ -95,7 +103,7 @@ const FoldersModule = ({ onNavigate }: FoldersModuleProps) => {
         events:     events.filter(e => isInFolder(e.subject_id, s.id)).length,
       },
     })).map(s => ({ ...s, total: Object.values(s.counts).reduce((a, b) => a + b, 0) })),
-    [subjects, notes, flashcards, tasks, materials, questions, events],
+    [visibleSubjects, notes, flashcards, tasks, materials, questions, events],
   );
 
   // Unorganized items — informational only, not a folder
@@ -145,15 +153,20 @@ const FoldersModule = ({ onNavigate }: FoldersModuleProps) => {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Excluir esta pasta? Os itens vinculados não serão deletados, apenas desvinculados da pasta.')) return;
-    await supabase.from('subjects').delete().eq('id', id);
+    // 1. Remove imediatamente da UI (otimista) — sem depender de real-time ou context
+    setDeletingIds(prev => [...prev, id]);
     if (selectedFolder === id) setSelectedFolder(null);
+    // 2. Persiste no servidor e sincroniza o contexto
+    await supabase.from('subjects').delete().eq('id', id);
     await refreshAllData();
+    // 3. Limpa o ID da lista de pendentes (contexto já está atualizado)
+    setDeletingIds(prev => prev.filter(i => i !== id));
   };
 
   // ── Derived values for the selected folder ────────────────────────────────
 
   const activeSubject = selectedFolder
-    ? subjects.find(s => s.id === selectedFolder) ?? null
+    ? visibleSubjects.find(s => s.id === selectedFolder) ?? null
     : null;
 
   const activeStats = selectedFolder
@@ -346,7 +359,7 @@ const FoldersModule = ({ onNavigate }: FoldersModuleProps) => {
           Todas as Pastas
         </button>
 
-        {subjects.map(s => {
+        {visibleSubjects.map(s => {
           const stat = folderStats.find(f => f.id === s.id);
           const isActive = selectedFolder === s.id;
           return (
