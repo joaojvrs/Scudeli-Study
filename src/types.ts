@@ -62,6 +62,7 @@ export interface Subject {
   name: string;
   color: string;
   user_id: string;
+  parent_id?: string | null;
 }
 
 export interface Flashcard {
@@ -75,6 +76,8 @@ export interface Flashcard {
   easiness: number;
   repetitions: number;
   tags: string[];
+  image_front?: string | null;
+  image_back?: string | null;
 }
 
 export interface Note {

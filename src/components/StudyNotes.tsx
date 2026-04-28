@@ -20,6 +20,7 @@ const PDF_CONTENT_STYLES = `
   em { font-style: italic !important; }
   u  { text-decoration: underline !important; }
   s  { text-decoration: line-through !important; }
+  img { max-width: 100% !important; border-radius: 8px !important; margin: 8px 0 !important; }
 `;
 
 interface StudyNotesProps {
@@ -184,6 +185,16 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
   // NO window.print(), NO browser dialog → no injected URL/date/headers.
   // The element is appended to document.body in normal flow (not off-screen) so
   // html2canvas can capture it correctly.
+  const handleNoteImageUpload = async (file: File): Promise<string> => {
+    if (!supabaseUser) throw new Error('Usuário não autenticado.');
+    const ext = file.name.split('.').pop() ?? 'jpg';
+    const path = `note-images/${supabaseUser.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error } = await supabase.storage.from('materials').upload(path, file, { contentType: file.type, upsert: false });
+    if (error) throw error;
+    const { data } = supabase.storage.from('materials').getPublicUrl(path);
+    return data.publicUrl;
+  };
+
   const handleExportPDF = async () => {
     if (!selectedNote || exporting) return;
     setExporting(true);
@@ -331,6 +342,7 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
             onChange={(html) => handleContentChange(selectedNote.id, html)}
             onExportPDF={handleExportPDF}
             exporting={exporting}
+            onImageUpload={handleNoteImageUpload}
           />
         </div>
       </div>

@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase, handleSupabaseError, OperationType } from '../lib/supabase';
-import { 
-  Plus, 
-  Search, 
-  Trash2, 
-  Play, 
-  ChevronLeft, 
+import {
+  Plus,
+  Search,
+  Trash2,
+  Play,
+  ChevronLeft,
   ChevronRight,
   ExternalLink,
   Brain,
@@ -16,7 +16,9 @@ import {
   RotateCcw,
   History,
   XCircle,
-  Filter
+  Filter,
+  ImagePlus,
+  Loader2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Flashcard } from '../types';
@@ -35,6 +37,10 @@ const Flashcards = () => {
   const [back, setBack] = useState('');
   const [subjectId, setSubjectId] = useState('');
   const [formTags, setFormTags] = useState<string[]>([]);
+  const [imageFrontUrl, setImageFrontUrl] = useState<string | null>(null);
+  const [imageBackUrl, setImageBackUrl]   = useState<string | null>(null);
+  const [uploadingFront, setUploadingFront] = useState(false);
+  const [uploadingBack, setUploadingBack]   = useState(false);
 
   // Review State
   const [reviewCards, setReviewCards] = useState<Flashcard[]>([]);
@@ -58,6 +64,25 @@ const Flashcards = () => {
     return flashcards.filter(c => new Date(c.next_review || 0) <= today);
   }, [flashcards]);
 
+  const uploadFlashcardImage = async (file: File, side: 'front' | 'back') => {
+    if (!supabaseUser) return;
+    const setUploading = side === 'front' ? setUploadingFront : setUploadingBack;
+    const setUrl       = side === 'front' ? setImageFrontUrl  : setImageBackUrl;
+    setUploading(true);
+    try {
+      const ext  = file.name.split('.').pop() ?? 'jpg';
+      const path = `flashcard-images/${supabaseUser.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error } = await supabase.storage.from('materials').upload(path, file, { contentType: file.type, upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from('materials').getPublicUrl(path);
+      setUrl(data.publicUrl);
+    } catch (err) {
+      console.error('Erro ao fazer upload da imagem:', err);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleAddCard = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabaseUser || !front || !back || !subjectId) return;
@@ -73,11 +98,15 @@ const Flashcards = () => {
         easiness: 2.5,
         repetitions: 0,
         created_at: new Date().toISOString(),
-        tags: formTags
+        tags: formTags,
+        image_front: imageFrontUrl,
+        image_back: imageBackUrl,
       });
       setFront('');
       setBack('');
       setFormTags([]);
+      setImageFrontUrl(null);
+      setImageBackUrl(null);
       setIsAdding(false);
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'flashcards');
@@ -199,6 +228,12 @@ const Flashcards = () => {
                 <h3 className="text-3xl font-bold text-gray-900 leading-[1.4] max-w-md font-montserrat tracking-tight">
                   {showAnswer ? card.back : card.front}
                 </h3>
+                {!showAnswer && card.image_front && (
+                  <img src={card.image_front} alt="" className="max-w-xs max-h-48 rounded-2xl object-contain mt-6" />
+                )}
+                {showAnswer && card.image_back && (
+                  <img src={card.image_back} alt="" className="max-w-xs max-h-48 rounded-2xl object-contain mt-6" />
+                )}
                 
                 <div className="absolute bottom-10 flex items-center space-x-2 text-gray-300 group-hover:text-brand-primary transition-colors">
                    <RotateCcw size={14} className="animate-spin-slow" />
@@ -314,6 +349,24 @@ const Flashcards = () => {
                   className="w-full p-6 bg-gray-50 border-transparent rounded-[24px] text-sm font-medium focus:bg-white focus:border-brand-primary/20 outline-none min-h-[160px] transition-all border shadow-inner"
                   required
                 />
+                {imageFrontUrl ? (
+                  <div className="relative w-fit">
+                    <img src={imageFrontUrl} alt="Frente" className="max-h-40 rounded-2xl object-cover border border-gray-100" />
+                    <button
+                      type="button"
+                      onClick={() => setImageFrontUrl(null)}
+                      className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                    >
+                      <XCircle size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-2xl text-xs font-bold text-gray-400 hover:bg-gray-100 transition-all border border-dashed border-gray-200">
+                    {uploadingFront ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                    {uploadingFront ? 'Enviando...' : 'Adicionar imagem'}
+                    <input type="file" accept="image/*" className="hidden" disabled={uploadingFront} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFlashcardImage(f, 'front'); e.target.value = ''; }} />
+                  </label>
+                )}
               </div>
               <div className="space-y-3">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Verso (Definição)</label>
@@ -324,6 +377,24 @@ const Flashcards = () => {
                   className="w-full p-6 bg-gray-50 border-transparent rounded-[24px] text-sm font-medium focus:bg-white focus:border-brand-primary/20 outline-none min-h-[160px] transition-all border shadow-inner"
                   required
                 />
+                {imageBackUrl ? (
+                  <div className="relative w-fit">
+                    <img src={imageBackUrl} alt="Verso" className="max-h-40 rounded-2xl object-cover border border-gray-100" />
+                    <button
+                      type="button"
+                      onClick={() => setImageBackUrl(null)}
+                      className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                    >
+                      <XCircle size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-2xl text-xs font-bold text-gray-400 hover:bg-gray-100 transition-all border border-dashed border-gray-200">
+                    {uploadingBack ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                    {uploadingBack ? 'Enviando...' : 'Adicionar imagem'}
+                    <input type="file" accept="image/*" className="hidden" disabled={uploadingBack} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFlashcardImage(f, 'back'); e.target.value = ''; }} />
+                  </label>
+                )}
               </div>
             </div>
 
@@ -379,6 +450,9 @@ const Flashcards = () => {
                  </button>
               </div>
               
+              {card.image_front && (
+                <img src={card.image_front} alt="" className="w-full h-28 object-cover rounded-2xl mb-4" />
+              )}
               <p className="text-lg font-bold text-gray-900 leading-tight mb-8 flex-1 font-montserrat tracking-tight line-clamp-4">
                 {card.front}
               </p>
