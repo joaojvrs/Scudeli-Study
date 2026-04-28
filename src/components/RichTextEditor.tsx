@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useEditor, EditorContent, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { Editor, Extension, Node, mergeAttributes } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -68,22 +68,135 @@ const FontSize = Extension.create({
   },
 });
 
+const HANDLE_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  width: 10,
+  height: 28,
+  background: '#3b82f6',
+  border: '2px solid #fff',
+  borderRadius: 4,
+  zIndex: 10,
+  cursor: 'ew-resize',
+};
+
+const ResizableImageView = ({ node, updateAttributes, selected }: {
+  node: { attrs: { src: string; alt: string; width: number | null } };
+  updateAttributes: (attrs: Record<string, any>) => void;
+  selected: boolean;
+  [key: string]: any;
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { src, alt, width } = node.attrs;
+
+  const startResize = useCallback((e: React.MouseEvent, dir: 'e' | 'w') => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = containerRef.current?.getBoundingClientRect().width ?? (width as number | null) ?? 300;
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - startX;
+      const next = Math.max(60, Math.round(dir === 'e' ? startW + delta : startW - delta));
+      updateAttributes({ width: next });
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [updateAttributes, width]);
+
+  return (
+    <NodeViewWrapper>
+      <div
+        ref={containerRef}
+        contentEditable={false}
+        style={{
+          display: 'inline-block',
+          position: 'relative',
+          width: width ? `${width}px` : 'auto',
+          maxWidth: '100%',
+          lineHeight: 0,
+          userSelect: 'none',
+          margin: '8px 0',
+        }}
+      >
+        <img
+          src={src}
+          alt={alt || ''}
+          draggable={false}
+          style={{
+            display: 'block',
+            width: '100%',
+            height: 'auto',
+            borderRadius: 8,
+            outline: selected ? '2px solid #3b82f6' : 'none',
+            outlineOffset: 2,
+          }}
+        />
+        {selected && (
+          <>
+            <div
+              style={{ ...HANDLE_STYLE, left: -5, top: '50%', transform: 'translateY(-50%)' }}
+              onMouseDown={(e) => startResize(e, 'w')}
+            />
+            <div
+              style={{ ...HANDLE_STYLE, right: -5, top: '50%', transform: 'translateY(-50%)' }}
+              onMouseDown={(e) => startResize(e, 'e')}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                right: -5,
+                bottom: -5,
+                width: 12,
+                height: 12,
+                background: '#3b82f6',
+                border: '2px solid #fff',
+                borderRadius: '50%',
+                cursor: 'nwse-resize',
+                zIndex: 10,
+              }}
+              onMouseDown={(e) => startResize(e, 'e')}
+            />
+          </>
+        )}
+      </div>
+    </NodeViewWrapper>
+  );
+};
+
 const ImageNode = Node.create({
   name: 'image',
   group: 'block',
-  draggable: true,
+  atom: true,
   addAttributes() {
     return {
       src: { default: null },
       alt: { default: '' },
-      style: { default: 'max-width:100%;border-radius:8px;margin:8px 0;' },
+      width: {
+        default: null,
+        parseHTML: (el: HTMLElement) => {
+          const m = (el.getAttribute('style') || '').match(/width:\s*(\d+)px/);
+          return m ? parseInt(m[1]) : null;
+        },
+        renderHTML: (attrs: Record<string, any>) =>
+          attrs.width ? { style: `width:${attrs.width}px` } : {},
+      },
     };
   },
   parseHTML() {
     return [{ tag: 'img[src]' }];
   },
   renderHTML({ HTMLAttributes }) {
-    return ['img', mergeAttributes(HTMLAttributes)];
+    const { width, ...rest } = HTMLAttributes;
+    return ['img', mergeAttributes(rest, {
+      style: `display:block;max-width:100%;border-radius:8px;margin:8px 0;${width ? `width:${width}px;` : ''}`,
+    })];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ResizableImageView);
   },
   addCommands(): any {
     return {
