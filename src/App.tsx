@@ -98,12 +98,12 @@ const AppContent = () => {
       case 'materials': return <MaterialsCenter />;
       case 'errors': return <ErrorNotebook />;
       case 'planner': return <StudyPlanner />;
-      case 'flashcards': return <Flashcards />;
+      case 'flashcards': return <Flashcards initialSubjectId={navSubjectId} />;
       case 'notes': return <StudyNotes initialSubjectId={navSubjectId} />;
       case 'questions': return <QuestionBank />;
-      case 'tasks': return <TaskManager />;
+      case 'tasks': return <TaskManager initialSubjectId={navSubjectId} />;
       case 'calendar': return <AcademicCalendar />;
-      case 'subjects': return <SubjectsModule />;
+      case 'subjects': return <SubjectsModule onNavigate={handleNavigate} />;
       case 'folders':  return <FoldersModule onNavigate={(tab, subjectId) => handleNavigate(tab, subjectId)} />;
       default: return <Dashboard />;
     }

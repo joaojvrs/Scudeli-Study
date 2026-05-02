@@ -62,6 +62,7 @@ export interface Subject {
   name: string;
   color: string;
   user_id: string;
+  parent_id?: string | null;
 }
 
 export interface Flashcard {
