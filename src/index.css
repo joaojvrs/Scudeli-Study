@@ -56,3 +56,28 @@
 .tiptap-editor li > p {
   margin: 0;
 }
+.tiptap-editor h1 {
+  font-size: 1.75rem;
+  font-weight: 800;
+  line-height: 1.25;
+  color: #111827;
+  margin: 1rem 0 0.4rem;
+}
+.tiptap-editor h2 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #1f2937;
+  margin: 0.85rem 0 0.35rem;
+  padding-left: 1.25rem;
+  border-left: 3px solid #e5e7eb;
+}
+.tiptap-editor h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #374151;
+  margin: 0.75rem 0 0.3rem;
+  padding-left: 2.5rem;
+  border-left: 3px solid #f3f4f6;
+}

@@ -16,6 +16,8 @@ import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { EventType, Event } from '../types';
 
+const FIXED_TYPES = [EventType.EXAM, EventType.CLASS, EventType.REVIEW, EventType.OTHER] as string[];
+
 const AcademicCalendar = () => {
   const { events, subjects, supabaseUser, refreshAllData } = useAppContext();
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -25,7 +27,8 @@ const AcademicCalendar = () => {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
-  const [type, setType] = useState<EventType>(EventType.OTHER);
+  const [type, setType] = useState<string>(EventType.OTHER);
+  const [customType, setCustomType] = useState('');
   const [subjectId, setSubjectId] = useState('');
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('09:00');
@@ -41,6 +44,7 @@ const AcademicCalendar = () => {
     setEditingEvent(null);
     setTitle('');
     setType(EventType.OTHER);
+    setCustomType('');
     setSubjectId('');
     setStartTime('08:00');
     setEndTime('09:00');
@@ -53,7 +57,13 @@ const AcademicCalendar = () => {
     const end = new Date(event.end);
     setEditingEvent(event);
     setTitle(event.title);
-    setType(event.type);
+    if (FIXED_TYPES.includes(event.type)) {
+      setType(event.type);
+      setCustomType('');
+    } else {
+      setType('custom');
+      setCustomType(event.type);
+    }
     setSubjectId(event.subject_id || '');
     setStartTime(format(start, 'HH:mm'));
     setEndTime(format(end, 'HH:mm'));
@@ -78,6 +88,8 @@ const AcademicCalendar = () => {
     return { start, end };
   };
 
+  const resolvedType = () => type === 'custom' ? (customType.trim() || EventType.OTHER) : type;
+
   const handleAddEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabaseUser || !title) return;
@@ -85,7 +97,7 @@ const AcademicCalendar = () => {
     try {
       await supabase.from('events').insert({
         title,
-        type,
+        type: resolvedType(),
         start: start.toISOString(),
         end: end.toISOString(),
         subject_id: subjectId || 'none',
@@ -106,7 +118,7 @@ const AcademicCalendar = () => {
     try {
       await supabase.from('events').update({
         title,
-        type,
+        type: resolvedType(),
         start: start.toISOString(),
         end: end.toISOString(),
         subject_id: subjectId || 'none',
@@ -132,7 +144,7 @@ const AcademicCalendar = () => {
     return events.filter(e => isSameDay(new Date(e.start), day));
   };
 
-  const getEventColor = (t: EventType) => {
+  const getEventColor = (t: string) => {
     switch (t) {
       case EventType.EXAM: return 'bg-red-500';
       case EventType.CLASS: return 'bg-blue-500';
@@ -262,14 +274,25 @@ const AcademicCalendar = () => {
                     <label className="text-[10px] font-bold text-gray-400 uppercase">Tipo</label>
                     <select
                       value={type}
-                      onChange={(e) => setType(e.target.value as EventType)}
+                      onChange={(e) => { setType(e.target.value); if (e.target.value !== 'custom') setCustomType(''); }}
                       className="w-full p-3 bg-brand-bg rounded-xl text-xs outline-none"
                     >
                       <option value={EventType.EXAM}>Prova</option>
                       <option value={EventType.CLASS}>Aula</option>
                       <option value={EventType.REVIEW}>Revisão</option>
                       <option value={EventType.OTHER}>Outro</option>
+                      <option value="custom">Personalizado...</option>
                     </select>
+                    {type === 'custom' && (
+                      <input
+                        type="text"
+                        value={customType}
+                        onChange={(e) => setCustomType(e.target.value)}
+                        className="w-full p-3 bg-brand-bg rounded-xl text-xs outline-none mt-1"
+                        placeholder="Digite o tipo..."
+                        autoFocus
+                      />
+                    )}
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase">Disciplina</label>

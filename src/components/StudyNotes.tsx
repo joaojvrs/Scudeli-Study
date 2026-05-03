@@ -21,6 +21,9 @@ const PDF_CONTENT_STYLES = `
   u  { text-decoration: underline !important; }
   s  { text-decoration: line-through !important; }
   img { max-width: 100%; border-radius: 8px !important; margin: 8px 0 !important; display: block !important; height: auto !important; }
+  h1 { font-size: 22px !important; font-weight: 800 !important; color: #111827 !important; margin: 16px 0 6px !important; line-height: 1.25 !important; }
+  h2 { font-size: 17px !important; font-weight: 700 !important; color: #1f2937 !important; margin: 13px 0 5px !important; line-height: 1.3 !important; }
+  h3 { font-size: 15px !important; font-weight: 700 !important; color: #374151 !important; margin: 11px 0 4px !important; line-height: 1.35 !important; }
 `;
 
 interface StudyNotesProps {
@@ -356,7 +359,7 @@ const StudyNotes = ({ initialSubjectId }: StudyNotesProps = {}) => {
           </div>
         </div>
 
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 flex flex-col">
           <RichTextEditor
             content={selectedNote.content}
             onChange={(html) => handleContentChange(selectedNote.id, html)}

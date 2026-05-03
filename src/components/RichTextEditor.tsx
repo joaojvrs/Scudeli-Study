@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useEditor, EditorContent, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
+import { useEditor, EditorContent, NodeViewWrapper, ReactNodeViewRenderer, ReactNodeViewProps } from '@tiptap/react';
 import { Editor, Extension, Node, mergeAttributes } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -68,6 +68,36 @@ const FontSize = Extension.create({
   },
 });
 
+// Tab  → demote heading level (H1→H2→H3); Shift-Tab → promote.
+// Enter keeps same heading level (default Tiptap), so multiple items at the
+// same level flow naturally. Tab/Shift-Tab navigate the hierarchy while typing.
+// Also supports Markdown shortcuts: # + space → H1, ## → H2, ### → H3.
+const HeadingBehavior = Extension.create({
+  name: 'headingBehavior',
+  addKeyboardShortcuts() {
+    return {
+      Tab: ({ editor }) => {
+        for (let level = 1; level <= 3; level++) {
+          if (editor.isActive('heading', { level })) {
+            if (level < 3) editor.chain().focus().toggleHeading({ level: (level + 1) as 2 | 3 }).run();
+            return true;
+          }
+        }
+        return false;
+      },
+      'Shift-Tab': ({ editor }) => {
+        for (let level = 1; level <= 3; level++) {
+          if (editor.isActive('heading', { level })) {
+            if (level > 1) editor.chain().focus().toggleHeading({ level: (level - 1) as 1 | 2 }).run();
+            return true;
+          }
+        }
+        return false;
+      },
+    };
+  },
+});
+
 const HANDLE_STYLE: React.CSSProperties = {
   position: 'absolute',
   width: 10,
@@ -79,14 +109,9 @@ const HANDLE_STYLE: React.CSSProperties = {
   cursor: 'ew-resize',
 };
 
-const ResizableImageView = ({ node, updateAttributes, selected }: {
-  node: { attrs: { src: string; alt: string; width: number | null } };
-  updateAttributes: (attrs: Record<string, any>) => void;
-  selected: boolean;
-  [key: string]: any;
-}) => {
+const ResizableImageView = ({ node, updateAttributes, selected }: ReactNodeViewProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { src, alt, width } = node.attrs;
+  const { src, alt, width } = node.attrs as { src: string; alt: string; width: number | null };
 
   const startResize = useCallback((e: React.MouseEvent, dir: 'e' | 'w') => {
     e.preventDefault();
@@ -250,9 +275,16 @@ const ToolbarBtn = ({
   </button>
 );
 
+const BLOCK_TYPES = [
+  { value: 'paragraph', label: 'Parágrafo' },
+  { value: 'h1',        label: 'Título 1' },
+  { value: 'h2',        label: '↳ Subtítulo 2' },
+  { value: 'h3',        label: '  ↳ Subtítulo 3' },
+];
+
 const Toolbar = ({
   editor, onExportPDF, exporting, onImageClick, imageUploading,
-  currentFontFamily, currentFontSize,
+  currentFontFamily, currentFontSize, currentBlockType,
 }: {
   editor: Editor;
   onExportPDF: () => void;
@@ -261,8 +293,28 @@ const Toolbar = ({
   imageUploading?: boolean;
   currentFontFamily: string;
   currentFontSize: string;
+  currentBlockType: string;
 }) => (
-  <div className="flex flex-wrap items-center gap-0.5 px-4 py-2 border-b border-gray-100 bg-gray-50/60 sticky top-0 z-10">
+  <div className="flex flex-wrap items-center gap-0.5 px-4 py-2 border-b border-gray-100 bg-gray-50/60 shrink-0">
+    <div className="pr-2 border-r border-gray-200 mr-1">
+      <select
+        onMouseDown={(e) => e.stopPropagation()}
+        value={currentBlockType}
+        title="Estilo do parágrafo (Enter = mesmo nível · Tab = subtópico · Shift+Tab = promover · # + espaço = Título 1)"
+        onChange={(e) => {
+          const val = e.target.value;
+          if (val === 'paragraph') (editor.chain().focus() as any).setParagraph().run();
+          else (editor.chain().focus() as any).toggleHeading({ level: parseInt(val.replace('h', '')) }).run();
+        }}
+        className="text-xs bg-white border border-gray-200 rounded-lg px-2 py-1.5 outline-none cursor-pointer text-gray-600 font-medium"
+        style={{ height: '30px', minWidth: '118px' }}
+      >
+        {BLOCK_TYPES.map(b => (
+          <option key={b.value} value={b.value}>{b.label}</option>
+        ))}
+      </select>
+    </div>
+
     <div className="flex items-center gap-0.5 pr-2 border-r border-gray-200 mr-1">
       <ToolbarBtn active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} title="Negrito (Ctrl+B)">
         <Bold size={15} />
@@ -390,11 +442,16 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
   const [imageUploading, setImageUploading] = useState(false);
   const [currentFontFamily, setCurrentFontFamily] = useState('');
   const [currentFontSize, setCurrentFontSize] = useState('');
+  const [currentBlockType, setCurrentBlockType] = useState('paragraph');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const syncTextStyle = (ed: Editor) => {
     setCurrentFontFamily(ed.getAttributes('textStyle').fontFamily ?? '');
     setCurrentFontSize(ed.getAttributes('textStyle').fontSize ?? '');
+    if (ed.isActive('heading', { level: 1 })) setCurrentBlockType('h1');
+    else if (ed.isActive('heading', { level: 2 })) setCurrentBlockType('h2');
+    else if (ed.isActive('heading', { level: 3 })) setCurrentBlockType('h3');
+    else setCurrentBlockType('paragraph');
   };
 
   const editor = useEditor({
@@ -405,6 +462,7 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
       Color,
       FontSize,
       FontFamily,
+      HeadingBehavior,
       ImageNode,
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
     ],
@@ -438,7 +496,7 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
 
   useEffect(() => {
     if (editor && !editor.isDestroyed && content !== editor.getHTML()) {
-      editor.commands.setContent(content || '<p></p>', false);
+      editor.commands.setContent(content || '<p></p>', { emitUpdate: false });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content]);
@@ -460,7 +518,7 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
   if (!editor) return null;
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+    <div className="flex flex-col h-full bg-white rounded-2xl border border-gray-100 shadow-sm">
       <Toolbar
         editor={editor}
         onExportPDF={onExportPDF}
@@ -469,6 +527,7 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
         imageUploading={imageUploading}
         currentFontFamily={currentFontFamily}
         currentFontSize={currentFontSize}
+        currentBlockType={currentBlockType}
       />
       <input
         ref={fileInputRef}
@@ -480,7 +539,9 @@ const RichTextEditor = ({ content, onChange, onExportPDF, exporting, onImageUplo
           if (file) handleImageFile(file);
         }}
       />
-      <EditorContent editor={editor} className="flex-1 overflow-y-auto" />
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <EditorContent editor={editor} />
+      </div>
     </div>
   );
 };

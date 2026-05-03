@@ -105,7 +105,7 @@ export interface Task {
 export interface Event {
   id: string;
   title: string;
-  type: EventType;
+  type: string;
   start: string;
   end: string;
   user_id: string;
