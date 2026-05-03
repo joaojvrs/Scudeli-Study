@@ -25,7 +25,7 @@ import { geminiService } from '../services/geminiService';
 import TagPicker from './TagPicker';
 
 const MaterialsCenter = () => {
-  const { supabaseUser, subjects, tags: globalTags, materials } = useAppContext();
+  const { supabaseUser, subjects, tags: globalTags, materials, refreshAllData } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTags, setFilterTags] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -51,6 +51,7 @@ const MaterialsCenter = () => {
           tags: [],
           summary: ''
         });
+        await refreshAllData();
       } catch (e) {
         handleSupabaseError(e, OperationType.CREATE, 'materials');
       } finally {
@@ -106,6 +107,7 @@ const MaterialsCenter = () => {
         });
       }
 
+      await refreshAllData();
       alert('IA Processada: Resumo gerado, 5 flashcards e 3 questões criadas!');
     } catch (e) {
       console.error(e);
@@ -315,6 +317,7 @@ const MaterialsCenter = () => {
                        onClick={async () => {
                          await supabase.from('materials').delete().eq('id', selectedMaterial.id);
                          setSelectedMaterial(null);
+                         await refreshAllData();
                        }}
                        className="p-2 text-gray-300 hover:text-red-500 transition-colors"
                      >

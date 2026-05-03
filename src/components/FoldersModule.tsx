@@ -1,23 +1,33 @@
 /**
- * FoldersModule — Hierarchical folder system (Windows-style)
+ * FoldersModule — Hierarchical folder system (adjacency list)
  *
- * Requires: ALTER TABLE subjects ADD COLUMN parent_id UUID REFERENCES subjects(id);
+ * Data model:
+ *   Subject.parent_id (nullable UUID, FK → subjects.id ON DELETE SET NULL)
+ *   null = root folder.
  *
- * Architecture:
- *  - Folders = subjects with optional parent_id
- *  - Items link to a folder via subject_id (direct, NOT inherited from parent)
- *  - Navigation via pathStack (breadcrumb)
- *  - Full CRUD: create, rename (inline), delete, move (modal picker)
- *  - Items can be moved between folders via "Mover" button
+ * Item membership:
+ *   item.subject_id === folder.id  — direct link only, never duplicated.
+ *
+ * Content aggregation:
+ *   When "Incluir subpastas" is on, items from all descendant folders are
+ *   collected via BFS and shown together. Toggle is per-session, defaults on.
+ *
+ * Tree traversal:
+ *   All traversal is in-memory (BFS) on the flat subjects[] already in context.
+ *   No recursive SQL queries. Safe for arbitrary nesting depth.
+ *
+ * DB migration required (run once in Supabase SQL Editor):
+ *   ALTER TABLE subjects
+ *     ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES subjects(id) ON DELETE SET NULL;
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useAppContext } from '../contexts/AppContext';
 import { supabase } from '../lib/supabase';
 import {
-  Folder, FolderOpen, Plus, Trash2, FileText, Brain, CheckSquare,
+  Folder, FolderOpen, FolderPlus, Plus, Trash2, FileText, Brain, CheckSquare,
   BookOpen, HelpCircle, Calendar, ExternalLink, Clock, AlertCircle,
-  ChevronRight, Edit2, Check, X, Home, Move,
+  ChevronRight, ChevronDown, ArrowLeft, Move, X,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { Note, Flashcard, Task, Material, Question, Event, Subject } from '../types';
@@ -60,18 +70,43 @@ const TABLE_MAP: Record<TabKey, string> = {
   materials: 'materials', questions: 'questions', events: 'events',
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Tree helpers (pure, BFS — safe for arbitrary depth) ───────────────────────
 
-function isInFolder(subjectId: string | null | undefined, folderId: string): boolean {
-  return subjectId != null && subjectId === folderId;
+function getChildren(parentId: string | null, subjects: Subject[]): Subject[] {
+  return subjects.filter(s => (s.parent_id ?? null) === parentId);
 }
 
-function getDescendantIds(folderId: string, all: Subject[]): string[] {
-  const children = all.filter(s => s.parent_id === folderId);
-  return children.flatMap(c => [c.id, ...getDescendantIds(c.id, all)]);
+// Returns [subjectId, ...all descendant IDs] via BFS — no recursion.
+function getDescendantIds(subjectId: string, subjects: Subject[]): string[] {
+  const result: string[] = [];
+  const queue = [subjectId];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    result.push(current);
+    subjects.filter(s => s.parent_id === current).forEach(s => queue.push(s.id));
+  }
+  return result;
 }
 
-// ── Folder Picker Modal ────────────────────────────────────────────────────────
+// Returns ancestors ordered root → parent (not including the subject itself).
+function getAncestors(subjectId: string, subjects: Subject[]): Subject[] {
+  const ancestors: Subject[] = [];
+  let currentId: string | null | undefined = subjectId;
+  const visited = new Set<string>();
+  while (currentId) {
+    if (visited.has(currentId)) break;
+    visited.add(currentId);
+    const node = subjects.find(s => s.id === currentId);
+    if (!node?.parent_id) break;
+    const parent = subjects.find(s => s.id === node.parent_id);
+    if (!parent) break;
+    ancestors.unshift(parent);
+    currentId = parent.id;
+  }
+  return ancestors;
+}
+
+// ── Folder Picker Modal (for moving folders and items) ─────────────────────────
 
 const FolderPickerNode: React.FC<{
   parentId: string | null;
@@ -149,7 +184,7 @@ const FolderPickerModal: React.FC<{
           className="w-full flex items-center gap-3 py-2.5 px-3 hover:bg-gray-50 rounded-xl transition-colors text-left"
         >
           <div className="w-7 h-7 bg-gray-100 rounded-lg flex items-center justify-center shrink-0">
-            <Home size={13} className="text-gray-500" />
+            <Folder size={13} className="text-gray-500" />
           </div>
           <span className="text-sm font-bold text-gray-700">Raiz (sem pasta-mãe)</span>
         </button>
@@ -168,147 +203,151 @@ const FolderPickerModal: React.FC<{
   </motion.div>
 );
 
-// ── Sidebar Tree Item (recursive) ──────────────────────────────────────────────
+// ── TreeNode ──────────────────────────────────────────────────────────────────
 
-interface TreeItemProps {
+interface TreeNodeProps {
   subject: Subject;
-  depth: number;
-  currentFolderId: string | null;
   allSubjects: Subject[];
-  statsMap: Record<string, number>;
+  selectedId: string | null;
+  expandedIds: Set<string>;
   onSelect: (id: string) => void;
-  onStartRename: (id: string, name: string) => void;
-  onDelete: (id: string) => void;
-  onStartMove: (id: string) => void;
-  renamingId: string | null;
-  renameValue: string;
-  setRenameValue: (v: string) => void;
-  onRenameSubmit: (id: string) => void;
-  onRenameCancel: () => void;
+  onToggleExpand: (id: string) => void;
+  directCountMap: Map<string, number>;
+  depth: number;
 }
 
-const TreeItem: React.FC<TreeItemProps> = ({
-  subject, depth, currentFolderId, allSubjects, statsMap, onSelect,
-  onStartRename, onDelete, onStartMove,
-  renamingId, renameValue, setRenameValue, onRenameSubmit, onRenameCancel,
-}) => {
-  const [expanded, setExpanded] = useState(true);
-  const children = allSubjects.filter(s => s.parent_id === subject.id);
-  const isActive = currentFolderId === subject.id;
-  const isRenaming = renamingId === subject.id;
+const TreeNode = ({
+  subject, allSubjects, selectedId, expandedIds, onSelect, onToggleExpand, directCountMap, depth,
+}: TreeNodeProps) => {
+  const children    = getChildren(subject.id, allSubjects);
+  const hasChildren = children.length > 0;
+  const isExpanded  = expandedIds.has(subject.id);
+  const isSelected  = selectedId === subject.id;
+  const count       = directCountMap.get(subject.id) ?? 0;
 
   return (
     <div>
       <div
-        style={{ paddingLeft: depth * 12 }}
-        className={`group flex items-center gap-1 rounded-xl py-1.5 pr-1.5 transition-all ${isActive ? 'bg-white shadow-sm border border-gray-100' : 'hover:bg-white/70'}`}
+        onClick={() => onSelect(subject.id)}
+        className={`flex items-center gap-1.5 py-2 pr-2 rounded-xl cursor-pointer transition-all select-none ${
+          isSelected ? 'bg-white shadow-sm border border-gray-100' : 'hover:bg-white/70'
+        }`}
+        style={{ paddingLeft: `${8 + depth * 14}px` }}
       >
-        {/* Expand toggle */}
         <button
-          onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}
-          className={`shrink-0 w-5 h-5 flex items-center justify-center ${children.length === 0 ? 'opacity-0 pointer-events-none' : ''}`}
+          type="button"
+          className="w-4 h-4 shrink-0 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors"
+          onClick={hasChildren ? (e) => { e.stopPropagation(); onToggleExpand(subject.id); } : undefined}
         >
-          <ChevronRight
-            size={11}
-            className={`text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
-          />
+          {hasChildren
+            ? (isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />)
+            : null}
         </button>
-
-        {/* Name / rename input */}
-        {isRenaming ? (
-          <div className="flex items-center gap-1 flex-1 min-w-0" onClick={e => e.stopPropagation()}>
-            <input
-              autoFocus
-              value={renameValue}
-              onChange={e => setRenameValue(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') onRenameSubmit(subject.id);
-                if (e.key === 'Escape') onRenameCancel();
-              }}
-              className="flex-1 px-2 py-0.5 text-xs font-bold bg-gray-50 border border-brand-primary/40 rounded-lg outline-none min-w-0"
-            />
-            <button onClick={() => onRenameSubmit(subject.id)} className="text-green-500 hover:text-green-600 shrink-0">
-              <Check size={12} />
-            </button>
-            <button onClick={onRenameCancel} className="text-gray-400 hover:text-red-500 shrink-0">
-              <X size={12} />
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => onSelect(subject.id)}
-            className="flex items-center gap-2 flex-1 min-w-0 text-left"
-          >
-            <div
-              className="w-5 h-5 rounded-md flex items-center justify-center text-white shrink-0"
-              style={{ backgroundColor: subject.color }}
-            >
-              {isActive ? <FolderOpen size={10} /> : <Folder size={10} />}
-            </div>
-            <span className={`text-xs font-bold truncate ${isActive ? 'text-gray-900' : 'text-gray-500'}`}>
-              {subject.name}
-            </span>
-            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-brand-primary/10 text-brand-primary' : 'bg-gray-100 text-gray-400'}`}>
-              {statsMap[subject.id] ?? 0}
-            </span>
-          </button>
-        )}
-
-        {/* Actions (hover) */}
-        {!isRenaming && (
-          <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity shrink-0">
-            <button
-              onClick={e => { e.stopPropagation(); onStartRename(subject.id, subject.name); }}
-              title="Renomear"
-              className="p-1 text-gray-300 hover:text-brand-primary rounded transition-colors"
-            >
-              <Edit2 size={10} />
-            </button>
-            <button
-              onClick={e => { e.stopPropagation(); onStartMove(subject.id); }}
-              title="Mover"
-              className="p-1 text-gray-300 hover:text-blue-500 rounded transition-colors"
-            >
-              <Move size={10} />
-            </button>
-            <button
-              onClick={e => { e.stopPropagation(); onDelete(subject.id); }}
-              title="Excluir"
-              className="p-1 text-gray-300 hover:text-red-500 rounded transition-colors"
-            >
-              <Trash2 size={10} />
-            </button>
-          </div>
+        <div
+          className="w-6 h-6 rounded-lg flex items-center justify-center text-white shrink-0"
+          style={{ backgroundColor: subject.color }}
+        >
+          {isSelected ? <FolderOpen size={11} /> : <Folder size={11} />}
+        </div>
+        <span className={`flex-1 text-sm font-bold text-left truncate ${isSelected ? 'text-gray-900' : 'text-gray-500'}`}>
+          {subject.name}
+        </span>
+        {count > 0 && (
+          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${
+            isSelected ? 'bg-brand-primary/10 text-brand-primary' : 'bg-gray-100 text-gray-400'
+          }`}>
+            {count}
+          </span>
         )}
       </div>
 
-      {/* Recursive children */}
-      {expanded && children.length > 0 && (
-        <div>
-          {children.map(child => (
-            <TreeItem
-              key={child.id}
-              subject={child}
-              depth={depth + 1}
-              currentFolderId={currentFolderId}
-              allSubjects={allSubjects}
-              statsMap={statsMap}
-              onSelect={onSelect}
-              onStartRename={onStartRename}
-              onDelete={onDelete}
-              onStartMove={onStartMove}
-              renamingId={renamingId}
-              renameValue={renameValue}
-              setRenameValue={setRenameValue}
-              onRenameSubmit={onRenameSubmit}
-              onRenameCancel={onRenameCancel}
-            />
-          ))}
-        </div>
-      )}
+      {hasChildren && isExpanded && children.map(child => (
+        <TreeNode
+          key={child.id}
+          subject={child}
+          allSubjects={allSubjects}
+          selectedId={selectedId}
+          expandedIds={expandedIds}
+          onSelect={onSelect}
+          onToggleExpand={onToggleExpand}
+          directCountMap={directCountMap}
+          depth={depth + 1}
+        />
+      ))}
     </div>
   );
 };
+
+// ── Create Folder Modal ───────────────────────────────────────────────────────
+
+interface CreateModalProps {
+  parentName?: string;
+  newName: string;
+  setNewName: (v: string) => void;
+  newColor: string;
+  setNewColor: (v: string) => void;
+  creating: boolean;
+  onSubmit: (e: React.FormEvent) => void;
+  onCancel: () => void;
+}
+
+const CreateFolderModal = ({
+  parentName, newName, setNewName, newColor, setNewColor, creating, onSubmit, onCancel,
+}: CreateModalProps) => (
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/10 backdrop-blur-[2px]"
+    onClick={onCancel}
+  >
+    <motion.form
+      initial={{ opacity: 0, scale: 0.95, y: -8 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95, y: -8 }}
+      onClick={(e) => e.stopPropagation()}
+      onSubmit={onSubmit}
+      className="bg-white rounded-3xl p-8 border border-brand-light shadow-2xl w-full max-w-md space-y-5"
+    >
+      <p className="text-xs font-black uppercase tracking-widest text-gray-400">
+        {parentName ? `Nova subpasta em "${parentName}"` : 'Nova pasta raiz'}
+      </p>
+      <input
+        autoFocus
+        type="text"
+        value={newName}
+        onChange={e => setNewName(e.target.value)}
+        placeholder="Ex: Anatomia, Cabeça e Pescoço..."
+        className="w-full p-4 bg-gray-50 rounded-2xl text-sm font-bold outline-none"
+        required
+      />
+      <div className="flex gap-3 flex-wrap">
+        {COLORS.map(c => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => setNewColor(c)}
+            className={`w-9 h-9 rounded-full border-4 transition-all ${newColor === c ? 'border-gray-800 scale-110' : 'border-transparent'}`}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+      </div>
+      <div className="flex gap-3 pt-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="flex-1 py-3 text-sm font-bold text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          Cancelar
+        </button>
+        <button
+          type="submit"
+          disabled={creating}
+          className="flex-1 py-3 bg-brand-primary text-white rounded-xl text-sm font-bold disabled:opacity-60"
+        >
+          {creating ? 'Criando...' : 'Criar'}
+        </button>
+      </div>
+    </motion.form>
+  </div>
+);
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
@@ -318,165 +357,177 @@ const FoldersModule = ({ onNavigate }: FoldersModuleProps) => {
     supabaseUser, refreshAllData,
   } = useAppContext();
 
-  // Navigation
-  const [pathStack, setPathStack] = useState<string[]>([]);
+  const [selectedFolder, setSelectedFolder]   = useState<string | null>(null);
+  const [activeTab, setActiveTab]             = useState<TabKey>('notes');
+  const [showCreate, setShowCreate]           = useState(false);
+  const [createParentId, setCreateParentId]   = useState<string | null>(null);
+  const [newName, setNewName]                 = useState('');
+  const [newColor, setNewColor]               = useState(COLORS[0]);
+  const [creating, setCreating]               = useState(false);
+  const [deletingIds, setDeletingIds]         = useState<string[]>([]);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [aggregated, setAggregated]           = useState(true);
+  const [movingFolderId, setMovingFolderId]   = useState<string | null>(null);
+  const [movingItem, setMovingItem]           = useState<{ type: TabKey; id: string } | null>(null);
 
-  // UI state
-  const [activeTab, setActiveTab] = useState<TabKey>('notes');
-  const [showCreate, setShowCreate] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newColor, setNewColor] = useState(COLORS[0]);
-  const [creating, setCreating] = useState(false);
-  const [deletingIds, setDeletingIds] = useState<string[]>([]);
-
-  // Rename
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
-
-  // Move
-  const [movingFolderId, setMovingFolderId] = useState<string | null>(null);
-  const [movingItem, setMovingItem] = useState<{ type: TabKey; id: string } | null>(null);
-
-  // Derived navigation
-  const currentFolderId = pathStack.length > 0 ? pathStack[pathStack.length - 1] : null;
-  const currentFolder = currentFolderId ? subjects.find(s => s.id === currentFolderId) ?? null : null;
-
+  // Subjects minus any optimistically-deleted ones
   const visibleSubjects = useMemo(
     () => subjects.filter(s => !deletingIds.includes(s.id)),
     [subjects, deletingIds]
   );
 
-  const rootSubjects = useMemo(
-    () => visibleSubjects.filter(s => !s.parent_id),
-    [visibleSubjects]
+  // Auto-expand the path to selectedFolder in the sidebar tree
+  useEffect(() => {
+    if (!selectedFolder) return;
+    const ancestors = getAncestors(selectedFolder, visibleSubjects);
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      ancestors.forEach(a => next.add(a.id));
+      next.add(selectedFolder);
+      return next;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFolder]);
+
+  const rootFolders = useMemo(() => getChildren(null, visibleSubjects), [visibleSubjects]);
+
+  // All IDs in the selected folder's subtree (self + descendants via BFS)
+  const selectedDescendantIds = useMemo(
+    () => selectedFolder ? getDescendantIds(selectedFolder, visibleSubjects) : [],
+    [selectedFolder, visibleSubjects],
   );
 
-  const currentSubfolders = useMemo(
-    () => visibleSubjects.filter(s => (s.parent_id ?? null) === currentFolderId),
-    [visibleSubjects, currentFolderId]
+  // IDs to match for content queries (depends on aggregation toggle)
+  const activeSubjectIdSet = useMemo(
+    () => aggregated
+      ? new Set(selectedDescendantIds)
+      : new Set(selectedFolder ? [selectedFolder] : []),
+    [aggregated, selectedDescendantIds, selectedFolder],
   );
 
-  // Item stats per folder (direct items only)
-  const statsMap = useMemo(() => {
-    const map: Record<string, number> = {};
+  // Per-folder direct item count (for sidebar tree badges)
+  const directCountMap = useMemo(() => {
+    const map = new Map<string, number>();
     visibleSubjects.forEach(s => {
-      map[s.id] =
-        notes.filter(i => isInFolder(i.subject_id, s.id)).length +
-        flashcards.filter(i => isInFolder(i.subject_id, s.id)).length +
-        tasks.filter(i => isInFolder(i.subject_id, s.id)).length +
-        materials.filter(i => isInFolder(i.subject_id, s.id)).length +
-        questions.filter(i => isInFolder(i.subject_id, s.id)).length +
-        events.filter(i => isInFolder(i.subject_id, s.id)).length;
+      const m = (sid: string | null) => sid === s.id;
+      map.set(s.id,
+        notes.filter(n => m(n.subject_id)).length +
+        flashcards.filter(c => m(c.subject_id)).length +
+        tasks.filter(t => m(t.subject_id)).length +
+        materials.filter(mt => m(mt.subject_id)).length +
+        questions.filter(q => m(q.subject_id)).length +
+        events.filter(e => m(e.subject_id)).length,
+      );
     });
     return map;
   }, [visibleSubjects, notes, flashcards, tasks, materials, questions, events]);
 
-  // Current folder tab counts
-  const tabCounts = useMemo((): Record<TabKey, number> | null => {
-    if (!currentFolderId) return null;
-    return {
-      notes:      notes.filter(i => isInFolder(i.subject_id, currentFolderId)).length,
-      flashcards: flashcards.filter(i => isInFolder(i.subject_id, currentFolderId)).length,
-      tasks:      tasks.filter(i => isInFolder(i.subject_id, currentFolderId)).length,
-      materials:  materials.filter(i => isInFolder(i.subject_id, currentFolderId)).length,
-      questions:  questions.filter(i => isInFolder(i.subject_id, currentFolderId)).length,
-      events:     events.filter(i => isInFolder(i.subject_id, currentFolderId)).length,
-    };
-  }, [currentFolderId, notes, flashcards, tasks, materials, questions, events]);
-
-  // Items for active tab in current folder
-  const tabItems = useMemo(() => {
-    if (!currentFolderId) return [];
-    const pool: Record<TabKey, any[]> = { notes, flashcards, tasks, materials, questions, events };
-    return pool[activeTab].filter((i: any) => isInFolder(i.subject_id, currentFolderId));
-  }, [currentFolderId, activeTab, notes, flashcards, tasks, materials, questions, events]);
-
-  // Breadcrumb
-  const breadcrumb = useMemo(
-    () => pathStack.map(id => ({ id, name: subjects.find(s => s.id === id)?.name ?? '…' })),
-    [pathStack, subjects]
+  // Root-folder overview stats — aggregate counts from all descendants
+  const rootFolderStats = useMemo(() =>
+    rootFolders.map(s => {
+      const descSet = new Set(getDescendantIds(s.id, visibleSubjects));
+      const isIn    = (sid: string | null) => sid != null && descSet.has(sid);
+      const counts  = {
+        notes:      notes.filter(n => isIn(n.subject_id)).length,
+        flashcards: flashcards.filter(c => isIn(c.subject_id)).length,
+        tasks:      tasks.filter(t => isIn(t.subject_id)).length,
+        materials:  materials.filter(mt => isIn(mt.subject_id)).length,
+        questions:  questions.filter(q => isIn(q.subject_id)).length,
+        events:     events.filter(e => isIn(e.subject_id)).length,
+      };
+      return {
+        ...s,
+        counts,
+        total: Object.values(counts).reduce((a, b) => a + b, 0),
+        subfolderCount: getChildren(s.id, visibleSubjects).length,
+      };
+    }),
+    [rootFolders, visibleSubjects, notes, flashcards, tasks, materials, questions, events],
   );
 
-  // Unorganized items (no subject_id)
+  // Items inside the selected folder (respecting aggregation)
+  const folderItems = useMemo(() => {
+    if (!selectedFolder) return null;
+    const isIn = (sid: string | null) => sid != null && activeSubjectIdSet.has(sid);
+    return {
+      notes:      notes.filter(n => isIn(n.subject_id)),
+      flashcards: flashcards.filter(c => isIn(c.subject_id)),
+      tasks:      tasks.filter(t => isIn(t.subject_id)),
+      materials:  materials.filter(mt => isIn(mt.subject_id)),
+      questions:  questions.filter(q => isIn(q.subject_id)),
+      events:     events.filter(e => isIn(e.subject_id)),
+    };
+  }, [selectedFolder, activeSubjectIdSet, notes, flashcards, tasks, materials, questions, events]);
+
+  const subfolders    = useMemo(() => selectedFolder ? getChildren(selectedFolder, visibleSubjects) : [],     [selectedFolder, visibleSubjects]);
+  const breadcrumb    = useMemo(() => selectedFolder ? getAncestors(selectedFolder, visibleSubjects) : [],    [selectedFolder, visibleSubjects]);
+  const activeSubject = useMemo(() => selectedFolder ? (visibleSubjects.find(s => s.id === selectedFolder) ?? null) : null, [selectedFolder, visibleSubjects]);
+
+  // Items with no valid folder (null or orphaned subject_id)
   const unorganized = useMemo(() => {
-    const n = notes.filter(i => !i.subject_id).length;
-    const f = flashcards.filter(i => !i.subject_id).length;
-    const t = tasks.filter(i => !i.subject_id).length;
-    const m = materials.filter(i => !i.subject_id).length;
-    const q = questions.filter(i => !i.subject_id).length;
-    const e = events.filter(i => !i.subject_id).length;
+    const validIds   = new Set(visibleSubjects.map(s => s.id));
+    const isOrphaned = (sid: string | null) => !sid || !validIds.has(sid);
+    const n = notes.filter(i => isOrphaned(i.subject_id)).length;
+    const f = flashcards.filter(i => isOrphaned(i.subject_id)).length;
+    const t = tasks.filter(i => isOrphaned(i.subject_id)).length;
+    const m = materials.filter(i => isOrphaned(i.subject_id)).length;
+    const q = questions.filter(i => isOrphaned(i.subject_id)).length;
+    const e = events.filter(i => isOrphaned(i.subject_id)).length;
     return { notes: n, flashcards: f, tasks: t, materials: m, questions: q, events: e, total: n + f + t + m + q + e };
-  }, [notes, flashcards, tasks, materials, questions, events]);
+  }, [visibleSubjects, notes, flashcards, tasks, materials, questions, events]);
 
-  // ── Navigation ─────────────────────────────────────────────────────────────
+  // Excluded IDs for move folder picker
+  const moveFolderExclude = movingFolderId
+    ? [movingFolderId, ...getDescendantIds(movingFolderId, visibleSubjects)]
+    : [];
 
-  const openFolder = (id: string) => {
-    setPathStack(prev => [...prev, id]);
-    setActiveTab('notes');
-    setShowCreate(false);
-  };
-
-  const goToRoot = () => { setPathStack([]); };
-
-  const goToBreadcrumb = (idx: number) => {
-    setPathStack(prev => prev.slice(0, idx + 1));
-  };
-
-  // ── CRUD ───────────────────────────────────────────────────────────────────
+  // ── CRUD ──────────────────────────────────────────────────────────────────
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabaseUser || !newName.trim() || creating) return;
     setCreating(true);
     try {
-      const { error } = await supabase.from('subjects').insert({
-        name: newName.trim(),
-        color: newColor,
-        user_id: supabaseUser.id,
-        parent_id: currentFolderId ?? null,
-      });
-      if (error) {
-        if (error.message?.includes('parent_id')) {
-          alert(
-            'Para usar subpastas, adicione a coluna no Supabase:\n\n' +
-            'ALTER TABLE subjects ADD COLUMN parent_id UUID REFERENCES subjects(id);'
-          );
-        }
-        throw error;
-      }
+      const { data, error } = await supabase
+        .from('subjects')
+        .insert({ name: newName.trim(), color: newColor, user_id: supabaseUser.id, parent_id: createParentId })
+        .select()
+        .single();
+      if (error) throw error;
       setNewName('');
       setShowCreate(false);
       await refreshAllData();
+      if (data) {
+        setSelectedFolder(data.id);
+        setExpandedFolders(prev => {
+          const next = new Set(prev);
+          if (createParentId) next.add(createParentId);
+          next.add(data.id);
+          return next;
+        });
+      }
     } finally {
       setCreating(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (visibleSubjects.some(s => s.parent_id === id)) {
-      alert('Esta pasta contém subpastas. Exclua ou mova-as primeiro.');
-      return;
-    }
-    if (!confirm('Excluir esta pasta? Os itens vinculados não serão deletados, apenas desvinculados.')) return;
+    const childCount = getChildren(id, visibleSubjects).length;
+    const msg = childCount > 0
+      ? `Esta pasta tem ${childCount} subpasta(s). Ao excluir, elas se tornarão pastas raiz. Os itens vinculados não serão deletados. Continuar?`
+      : 'Excluir esta pasta? Os itens vinculados não serão deletados, apenas desvinculados.';
+    if (!confirm(msg)) return;
     setDeletingIds(prev => [...prev, id]);
-    if (currentFolderId === id) setPathStack(prev => prev.slice(0, -1));
+    if (selectedFolder === id) setSelectedFolder(null);
     await supabase.from('subjects').delete().eq('id', id);
     await refreshAllData();
     setDeletingIds(prev => prev.filter(i => i !== id));
   };
 
-  const handleRenameSubmit = async (id: string) => {
-    if (!renameValue.trim()) { setRenamingId(null); return; }
-    await supabase.from('subjects').update({ name: renameValue.trim() }).eq('id', id);
-    await refreshAllData();
-    setRenamingId(null);
-  };
-
   const handleMoveFolder = async (newParentId: string | null) => {
     if (!movingFolderId) return;
     await supabase.from('subjects').update({ parent_id: newParentId }).eq('id', movingFolderId);
-    // If we moved the current folder or an ancestor, go home
-    if (movingFolderId === currentFolderId || pathStack.includes(movingFolderId)) goToRoot();
+    if (movingFolderId === selectedFolder) setSelectedFolder(null);
     await refreshAllData();
     setMovingFolderId(null);
   };
@@ -491,408 +542,177 @@ const FoldersModule = ({ onNavigate }: FoldersModuleProps) => {
     setMovingItem(null);
   };
 
-  // Excluded IDs for move folder picker
-  const moveFolderExclude = movingFolderId
-    ? [movingFolderId, ...getDescendantIds(movingFolderId, visibleSubjects)]
-    : [];
+  const toggleExpand = useCallback((id: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  const openCreate = (parentId: string | null) => {
+    setCreateParentId(parentId);
+    setNewName('');
+    setNewColor(COLORS[0]);
+    setShowCreate(true);
+  };
 
-  return (
-    <div className="flex h-full gap-5 overflow-hidden">
+  const createModalParentName = createParentId
+    ? visibleSubjects.find(s => s.id === createParentId)?.name
+    : undefined;
 
-      {/* ── Sidebar ──────────────────────────────────────────────────────────── */}
-      <aside className="w-60 shrink-0 flex flex-col bg-white rounded-[24px] border border-gray-100 shadow-sm p-3 overflow-y-auto">
-        {/* Sidebar header */}
-        <div className="flex items-center justify-between px-2 mb-2">
-          <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Pastas</span>
-          <button
-            onClick={() => { goToRoot(); setShowCreate(true); }}
-            title="Nova pasta"
-            className="w-6 h-6 bg-brand-light rounded-lg flex items-center justify-center text-brand-primary hover:bg-brand-primary hover:text-white transition-colors"
-          >
-            <Plus size={13} />
-          </button>
-        </div>
+  // ── A) OVERVIEW: no folder selected ──────────────────────────────────────
 
-        {/* Root */}
-        <button
-          onClick={goToRoot}
-          className={`flex items-center gap-2 px-2.5 py-2 rounded-xl mb-1 transition-all ${!currentFolderId ? 'bg-brand-light text-brand-primary' : 'text-gray-500 hover:bg-gray-50'}`}
-        >
-          <Home size={13} />
-          <span className="text-xs font-bold flex-1 text-left">Todas as Pastas</span>
-          <span className="text-[9px] font-black px-1.5 py-0.5 bg-gray-100 text-gray-400 rounded-full">
-            {visibleSubjects.length}
-          </span>
-        </button>
-
-        <div className="h-px bg-gray-100 mb-2" />
-
-        {/* Recursive tree */}
-        <div className="flex-1 space-y-0.5 overflow-y-auto">
-          {rootSubjects.map(s => (
-            <TreeItem
-              key={s.id}
-              subject={s}
-              depth={0}
-              currentFolderId={currentFolderId}
-              allSubjects={visibleSubjects}
-              statsMap={statsMap}
-              onSelect={openFolder}
-              onStartRename={(id, name) => { setRenamingId(id); setRenameValue(name); }}
-              onDelete={handleDelete}
-              onStartMove={id => setMovingFolderId(id)}
-              renamingId={renamingId}
-              renameValue={renameValue}
-              setRenameValue={setRenameValue}
-              onRenameSubmit={handleRenameSubmit}
-              onRenameCancel={() => setRenamingId(null)}
-            />
-          ))}
-          {rootSubjects.length === 0 && (
-            <p className="text-xs text-gray-300 text-center py-8 italic">Nenhuma pasta ainda</p>
-          )}
-        </div>
-      </aside>
-
-      {/* ── Main Area ─────────────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 gap-4 overflow-hidden">
-
-        {/* Breadcrumb + Actions */}
-        <div className="flex items-center justify-between gap-3 shrink-0">
-          {/* Breadcrumb */}
-          <nav className="flex items-center gap-1 min-w-0 overflow-x-auto">
-            <button
-              onClick={goToRoot}
-              className={`flex items-center gap-1.5 text-xs font-bold shrink-0 px-2.5 py-1.5 rounded-xl transition-colors ${!currentFolderId ? 'text-brand-primary bg-brand-light' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'}`}
-            >
-              <Home size={13} />
-              <span>Pastas</span>
-            </button>
-            {breadcrumb.map((crumb, idx) => (
-              <React.Fragment key={crumb.id}>
-                <ChevronRight size={12} className="text-gray-300 shrink-0" />
-                <button
-                  onClick={() => goToBreadcrumb(idx)}
-                  className={`text-xs font-bold px-2.5 py-1.5 rounded-xl transition-colors shrink-0 max-w-[140px] truncate ${idx === breadcrumb.length - 1 ? 'text-gray-900 bg-gray-100' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'}`}
-                >
-                  {crumb.name}
-                </button>
-              </React.Fragment>
-            ))}
-          </nav>
-
-          {/* Folder-level actions */}
-          <div className="flex items-center gap-2 shrink-0">
-            {currentFolder && (
-              <>
-                {renamingId === currentFolder.id ? (
-                  <div className="flex items-center gap-1">
-                    <input
-                      autoFocus
-                      value={renameValue}
-                      onChange={e => setRenameValue(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') handleRenameSubmit(currentFolder.id);
-                        if (e.key === 'Escape') setRenamingId(null);
-                      }}
-                      className="px-3 py-1.5 text-xs font-bold bg-white border border-brand-primary/40 rounded-xl outline-none w-36"
-                    />
-                    <button onClick={() => handleRenameSubmit(currentFolder.id)} className="p-1.5 bg-green-50 text-green-500 rounded-xl hover:bg-green-100 transition-colors">
-                      <Check size={13} />
-                    </button>
-                    <button onClick={() => setRenamingId(null)} className="p-1.5 bg-gray-100 text-gray-400 rounded-xl hover:bg-gray-200 transition-colors">
-                      <X size={13} />
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => { setRenamingId(currentFolder.id); setRenameValue(currentFolder.name); }}
-                    className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-brand-primary px-3 py-2 bg-white rounded-xl border border-gray-100 hover:border-brand-primary/30 transition-all"
-                  >
-                    <Edit2 size={12} />
-                    Renomear
-                  </button>
-                )}
-                <button
-                  onClick={() => setMovingFolderId(currentFolder.id)}
-                  className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-blue-500 px-3 py-2 bg-white rounded-xl border border-gray-100 hover:border-blue-200 transition-all"
-                >
-                  <Move size={12} />
-                  Mover
-                </button>
-                <button
-                  onClick={() => handleDelete(currentFolder.id)}
-                  className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-red-500 px-3 py-2 bg-white rounded-xl border border-gray-100 hover:border-red-200 transition-all"
-                >
-                  <Trash2 size={12} />
-                  Excluir
-                </button>
-              </>
-            )}
-            <button
-              onClick={() => setShowCreate(!showCreate)}
-              className="flex items-center gap-1.5 px-4 py-2 bg-brand-primary text-white rounded-xl font-bold text-xs shadow-lg shadow-brand-primary/20 hover:scale-105 active:scale-95 transition-all"
-            >
-              <Plus size={14} />
-              Nova Pasta
-            </button>
-          </div>
-        </div>
-
-        {/* Create Form */}
+  if (!selectedFolder) {
+    return (
+      <div className="space-y-8">
         <AnimatePresence>
           {showCreate && (
-            <motion.form
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
+            <CreateFolderModal
+              parentName={createModalParentName}
+              newName={newName} setNewName={setNewName}
+              newColor={newColor} setNewColor={setNewColor}
+              creating={creating}
               onSubmit={handleCreate}
-              className="bg-white rounded-2xl p-6 border border-brand-light shadow-lg max-w-md space-y-4 shrink-0"
-            >
-              <p className="text-xs font-black uppercase tracking-widest text-gray-400">
-                Nova pasta{currentFolder ? ` dentro de "${currentFolder.name}"` : ' na raiz'}
-              </p>
-              <input
-                autoFocus
-                type="text"
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
-                placeholder="Ex: Anatomia, Farmacologia..."
-                className="w-full p-3 bg-gray-50 rounded-xl text-sm font-bold outline-none border border-transparent focus:border-brand-primary/30"
-                required
-              />
-              <div className="flex gap-2 flex-wrap">
-                {COLORS.map(c => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setNewColor(c)}
-                    className={`w-8 h-8 rounded-full border-4 transition-all ${newColor === c ? 'border-gray-800 scale-110' : 'border-transparent'}`}
-                    style={{ backgroundColor: c }}
-                  />
-                ))}
-              </div>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowCreate(false)}
-                  className="flex-1 py-2.5 text-sm font-bold text-gray-400 hover:text-gray-600 transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={creating}
-                  className="flex-1 py-2.5 bg-brand-primary text-white rounded-xl text-sm font-bold disabled:opacity-60"
-                >
-                  {creating ? 'Criando…' : 'Criar Pasta'}
-                </button>
-              </div>
-            </motion.form>
+              onCancel={() => setShowCreate(false)}
+            />
           )}
         </AnimatePresence>
 
-        {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto space-y-6 pr-1">
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-brand-light rounded-2xl flex items-center justify-center text-brand-primary">
+              <Folder size={24} />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Pastas</h2>
+              <p className="text-sm text-gray-400">Organização hierárquica de todo o seu estudo.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => openCreate(null)}
+            className="flex items-center gap-2 px-6 py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-105 active:scale-95 transition-all"
+          >
+            <Plus size={15} />
+            Nova Pasta
+          </button>
+        </header>
 
-          {/* Subfolders grid */}
-          {currentSubfolders.length > 0 && (
-            <section className="space-y-3">
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-1">
-                {currentFolderId ? 'Subpastas' : 'Pastas'}
+        {rootFolderStats.length === 0 ? (
+          <div className="py-24 bg-white rounded-3xl border border-dashed border-gray-200 flex flex-col items-center justify-center text-center">
+            <Folder size={48} className="text-gray-200 mb-4" />
+            <p className="text-sm text-gray-400 max-w-xs">
+              Ainda não há pastas. Crie uma pasta para organizar seus estudos em hierarquias.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {rootFolderStats.map(s => (
+              <motion.div
+                key={s.id}
+                whileHover={{ y: -4 }}
+                onClick={() => setSelectedFolder(s.id)}
+                className="group bg-white p-7 rounded-3xl border border-gray-50 shadow-sm hover:shadow-xl transition-all cursor-pointer"
+              >
+                <div className="flex items-start justify-between mb-5">
+                  <div
+                    className="w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg"
+                    style={{ backgroundColor: s.color, boxShadow: `0 8px 20px -4px ${s.color}50` }}
+                  >
+                    <FolderOpen size={22} />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={e => { e.stopPropagation(); handleDelete(s.id); }}
+                    className="p-2 text-gray-200 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+
+                <h3 className="font-bold text-gray-900 text-lg mb-1 truncate">{s.name}</h3>
+                <p className="text-xs text-gray-400 mb-4">
+                  {s.total} {s.total === 1 ? 'item' : 'itens'}
+                  {s.subfolderCount > 0 && (
+                    <span className="ml-2 text-brand-primary font-bold">
+                      {s.subfolderCount} subpasta{s.subfolderCount > 1 ? 's' : ''}
+                    </span>
+                  )}
+                </p>
+
+                <div className="flex flex-wrap gap-2">
+                  {TABS.filter(t => s.counts[t.key] > 0).map(t => {
+                    const style = TAB_STYLE[t.key];
+                    const Icon  = style.icon;
+                    return (
+                      <span key={t.key} className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full ${style.pill}`}>
+                        <Icon size={10} />
+                        {s.counts[t.key]}
+                      </span>
+                    );
+                  })}
+                  {s.total === 0 && (
+                    <span className="text-[10px] text-gray-300 font-bold">Sem itens ainda</span>
+                  )}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        )}
+
+        {unorganized.total > 0 && (
+          <div className="flex items-start gap-3 p-5 bg-amber-50 border border-amber-100 rounded-2xl">
+            <AlertCircle size={18} className="text-amber-500 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-bold text-amber-800">
+                {unorganized.total} {unorganized.total === 1 ? 'item sem pasta' : 'itens sem pasta'}
               </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                {currentSubfolders.map(s => {
-                  const isRenamingCard = renamingId === s.id;
-                  const childCount = visibleSubjects.filter(c => c.parent_id === s.id).length;
-                  return (
-                    <motion.div
-                      key={s.id}
-                      whileHover={{ y: -3 }}
-                      className="group bg-white p-5 rounded-2xl border border-gray-50 shadow-sm hover:shadow-lg transition-all cursor-pointer relative"
-                      onClick={() => !isRenamingCard && openFolder(s.id)}
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-md shrink-0"
-                          style={{ backgroundColor: s.color, boxShadow: `0 6px 16px -4px ${s.color}60` }}
-                        >
-                          <FolderOpen size={18} />
-                        </div>
-                        <div
-                          className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity"
-                          onClick={e => e.stopPropagation()}
-                        >
-                          <button
-                            onClick={() => { setRenamingId(s.id); setRenameValue(s.name); }}
-                            title="Renomear"
-                            className="p-1.5 text-gray-300 hover:text-brand-primary rounded-lg transition-colors"
-                          >
-                            <Edit2 size={12} />
-                          </button>
-                          <button
-                            onClick={() => setMovingFolderId(s.id)}
-                            title="Mover"
-                            className="p-1.5 text-gray-300 hover:text-blue-500 rounded-lg transition-colors"
-                          >
-                            <Move size={12} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(s.id)}
-                            title="Excluir"
-                            className="p-1.5 text-gray-300 hover:text-red-500 rounded-lg transition-colors"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {isRenamingCard ? (
-                        <div onClick={e => e.stopPropagation()}>
-                          <input
-                            autoFocus
-                            value={renameValue}
-                            onChange={e => setRenameValue(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') handleRenameSubmit(s.id);
-                              if (e.key === 'Escape') setRenamingId(null);
-                            }}
-                            className="w-full px-2 py-1 text-xs font-bold bg-gray-50 border border-brand-primary/30 rounded-lg outline-none"
-                          />
-                          <div className="flex gap-1 mt-2">
-                            <button onClick={() => handleRenameSubmit(s.id)} className="flex-1 py-1 bg-brand-primary text-white rounded-lg text-[10px] font-black">
-                              Salvar
-                            </button>
-                            <button onClick={() => setRenamingId(null)} className="flex-1 py-1 bg-gray-100 text-gray-500 rounded-lg text-[10px] font-black">
-                              Cancelar
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <h4 className="font-bold text-gray-900 text-sm truncate">{s.name}</h4>
-                          <p className="text-xs text-gray-400 mt-0.5">{statsMap[s.id] ?? 0} itens diretos</p>
-                          {childCount > 0 && (
-                            <p className="text-[10px] text-gray-300 font-bold mt-0.5">
-                              {childCount} subpasta{childCount > 1 ? 's' : ''}
-                            </p>
-                          )}
-                        </>
-                      )}
-                    </motion.div>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {/* Items tabs (only inside a folder) */}
-          {currentFolderId && tabCounts && (
-            <section className="space-y-4">
-              <div className="flex items-center gap-1 bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
-                {TABS.map(({ key, label }) => {
-                  const count = tabCounts[key];
-                  const style = TAB_STYLE[key];
-                  const Icon = style.icon;
-                  const isActive = activeTab === key;
+              <p className="text-xs text-amber-600 mt-0.5">
+                Estes itens não estão vinculados a nenhuma pasta e aparecem apenas nos módulos originais.
+              </p>
+              <div className="flex flex-wrap gap-3 mt-3">
+                {TABS.filter(t => unorganized[t.key] > 0).map(t => {
+                  const style = TAB_STYLE[t.key];
+                  const Icon  = style.icon;
                   return (
                     <button
-                      key={key}
-                      onClick={() => setActiveTab(key)}
-                      className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${isActive ? style.active : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
+                      key={t.key}
+                      onClick={() => onNavigate(t.moduleTab)}
+                      className={`flex items-center gap-1.5 text-[10px] font-bold px-3 py-1.5 rounded-full ${style.pill} hover:scale-105 transition-transform`}
                     >
-                      <Icon size={13} />
-                      <span>{label}</span>
-                      {count > 0 && (
-                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${isActive ? style.pill : 'bg-gray-100 text-gray-400'}`}>
-                          {count}
-                        </span>
-                      )}
+                      <Icon size={10} />
+                      {unorganized[t.key]} em {t.label}
                     </button>
                   );
                 })}
               </div>
-
-              <div className="space-y-2">
-                {tabItems.length === 0 ? (
-                  <EmptyTab
-                    tabKey={activeTab}
-                    folderName={currentFolder?.name ?? ''}
-                    onNavigate={() => onNavigate(TABS.find(t => t.key === activeTab)!.moduleTab, currentFolderId)}
-                  />
-                ) : (
-                  <>
-                    {tabItems.map((item: any) => (
-                      <ContentRow
-                        key={item.id}
-                        tabKey={activeTab}
-                        item={item}
-                        onGo={() => onNavigate(TABS.find(t => t.key === activeTab)!.moduleTab, currentFolderId)}
-                        onMove={() => setMovingItem({ type: activeTab, id: item.id })}
-                      />
-                    ))}
-                    <div className="flex justify-end pt-1 pb-4">
-                      <button
-                        onClick={() => onNavigate(TABS.find(t => t.key === activeTab)!.moduleTab, currentFolderId)}
-                        className="text-xs font-bold text-gray-400 hover:text-brand-primary transition-colors flex items-center gap-1.5"
-                      >
-                        Abrir módulo completo
-                        <ExternalLink size={11} />
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </section>
-          )}
-
-          {/* Root empty state */}
-          {!currentFolderId && currentSubfolders.length === 0 && (
-            <div className="py-24 bg-white rounded-3xl border border-dashed border-gray-200 flex flex-col items-center justify-center text-center">
-              <Folder size={48} className="text-gray-200 mb-4" />
-              <p className="text-sm text-gray-400 max-w-xs">
-                Ainda não há pastas. Clique em "Nova Pasta" para criar sua estrutura hierárquica de estudos.
-              </p>
             </div>
-          )}
-
-          {/* Unorganized banner (root only) */}
-          {!currentFolderId && unorganized.total > 0 && (
-            <div className="flex items-start gap-3 p-5 bg-amber-50 border border-amber-100 rounded-2xl">
-              <AlertCircle size={17} className="text-amber-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-bold text-amber-800">
-                  {unorganized.total} {unorganized.total === 1 ? 'item sem pasta' : 'itens sem pasta'}
-                </p>
-                <p className="text-xs text-amber-600 mt-0.5">
-                  Estes itens não estão vinculados a nenhuma pasta. Acesse o módulo correspondente para organizá-los.
-                </p>
-                <div className="flex flex-wrap gap-2 mt-3">
-                  {TABS.filter(t => unorganized[t.key as keyof typeof unorganized] as number > 0).map(t => {
-                    const style = TAB_STYLE[t.key];
-                    const Icon = style.icon;
-                    return (
-                      <button
-                        key={t.key}
-                        onClick={() => onNavigate(t.moduleTab)}
-                        className={`flex items-center gap-1.5 text-[10px] font-bold px-3 py-1.5 rounded-full ${style.pill} hover:scale-105 transition-transform`}
-                      >
-                        <Icon size={10} />
-                        {unorganized[t.key as keyof typeof unorganized] as number} em {t.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
+    );
+  }
 
-      {/* ── Modals ─────────────────────────────────────────────────────────────── */}
+  // ── B) FOLDER VIEW: a specific folder is selected ─────────────────────────
+
+  if (!folderItems || !activeSubject) return null;
+
+  const tabItems   = folderItems[activeTab];
+  const totalItems = Object.values(folderItems).reduce((a, b) => a + b.length, 0);
+
+  return (
+    <div className="flex h-full gap-6 overflow-hidden">
       <AnimatePresence>
+        {showCreate && (
+          <CreateFolderModal
+            parentName={createModalParentName}
+            newName={newName} setNewName={setNewName}
+            newColor={newColor} setNewColor={setNewColor}
+            creating={creating}
+            onSubmit={handleCreate}
+            onCancel={() => setShowCreate(false)}
+          />
+        )}
         {movingFolderId && (
           <FolderPickerModal
             title={`Mover "${visibleSubjects.find(s => s.id === movingFolderId)?.name ?? 'pasta'}" para…`}
@@ -912,6 +732,237 @@ const FoldersModule = ({ onNavigate }: FoldersModuleProps) => {
           />
         )}
       </AnimatePresence>
+
+      {/* ── Left sidebar: full tree ──────────────────────────────────────────── */}
+      <aside className="w-64 shrink-0 flex flex-col gap-1 overflow-y-auto pb-4">
+        <button
+          onClick={() => setSelectedFolder(null)}
+          className="flex items-center gap-2 px-3 py-2.5 text-sm font-bold text-gray-400 hover:text-brand-primary transition-colors mb-3"
+        >
+          <ArrowLeft size={16} />
+          Todas as Pastas
+        </button>
+
+        {rootFolders.map(s => (
+          <TreeNode
+            key={s.id}
+            subject={s}
+            allSubjects={visibleSubjects}
+            selectedId={selectedFolder}
+            expandedIds={expandedFolders}
+            onSelect={id => { setSelectedFolder(id); setActiveTab('notes'); }}
+            onToggleExpand={toggleExpand}
+            directCountMap={directCountMap}
+            depth={0}
+          />
+        ))}
+
+        <button
+          onClick={() => openCreate(null)}
+          className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-bold text-gray-400 hover:text-brand-primary hover:bg-white/70 transition-all mt-2"
+        >
+          <Plus size={14} />
+          Nova Pasta Raiz
+        </button>
+      </aside>
+
+      {/* ── Right panel ──────────────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0 gap-4 overflow-hidden">
+
+        {/* Breadcrumb */}
+        <nav className="flex items-center gap-1 text-xs font-bold text-gray-400 shrink-0 flex-wrap">
+          <button onClick={() => setSelectedFolder(null)} className="hover:text-brand-primary transition-colors">
+            Pastas
+          </button>
+          {breadcrumb.map(ancestor => (
+            <React.Fragment key={ancestor.id}>
+              <ChevronRight size={11} className="text-gray-300" />
+              <button
+                onClick={() => { setSelectedFolder(ancestor.id); setActiveTab('notes'); }}
+                className="hover:text-brand-primary transition-colors"
+              >
+                {ancestor.name}
+              </button>
+            </React.Fragment>
+          ))}
+          <ChevronRight size={11} className="text-gray-300" />
+          <span className="text-gray-900">{activeSubject.name}</span>
+        </nav>
+
+        {/* Folder header */}
+        <div className="flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-4">
+            <div
+              className="w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg shrink-0"
+              style={{ backgroundColor: activeSubject.color, boxShadow: `0 8px 20px -4px ${activeSubject.color}50` }}
+            >
+              <FolderOpen size={22} />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 tracking-tight leading-none">
+                {activeSubject.name}
+              </h2>
+              <p className="text-sm text-gray-400 mt-1">
+                {totalItems} {totalItems === 1 ? 'item' : 'itens'}
+                {aggregated && subfolders.length > 0 && ' (incluindo subpastas)'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setMovingFolderId(activeSubject.id)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-gray-50 text-gray-500 rounded-xl text-xs font-bold hover:bg-gray-100 transition-all border border-gray-100"
+              title="Mover pasta"
+            >
+              <Move size={14} />
+              Mover
+            </button>
+            <button
+              onClick={() => openCreate(activeSubject.id)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-brand-light text-brand-primary rounded-xl text-xs font-bold hover:scale-105 active:scale-95 transition-all"
+            >
+              <FolderPlus size={14} />
+              Nova Subpasta
+            </button>
+            <button
+              onClick={() => handleDelete(activeSubject.id)}
+              className="p-2 text-gray-300 hover:text-red-500 transition-colors"
+              title="Excluir pasta"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Subfolders chip row */}
+        {subfolders.length > 0 && (
+          <div className="shrink-0">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+              Subpastas ({subfolders.length})
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {subfolders.map(sf => {
+                const sfDescSet = new Set(getDescendantIds(sf.id, visibleSubjects));
+                const isIn      = (sid: string | null) => sid != null && sfDescSet.has(sid);
+                const sfTotal   =
+                  notes.filter(n => isIn(n.subject_id)).length +
+                  flashcards.filter(c => isIn(c.subject_id)).length +
+                  tasks.filter(t => isIn(t.subject_id)).length +
+                  materials.filter(mt => isIn(mt.subject_id)).length +
+                  questions.filter(q => isIn(q.subject_id)).length +
+                  events.filter(e => isIn(e.subject_id)).length;
+                const sfChildren = getChildren(sf.id, visibleSubjects).length;
+                return (
+                  <button
+                    key={sf.id}
+                    onClick={() => { setSelectedFolder(sf.id); setActiveTab('notes'); }}
+                    className="flex items-center gap-2.5 px-4 py-2.5 bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md hover:scale-[1.02] transition-all"
+                  >
+                    <div
+                      className="w-7 h-7 rounded-xl flex items-center justify-center text-white shrink-0"
+                      style={{ backgroundColor: sf.color }}
+                    >
+                      <Folder size={13} />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-bold text-gray-800 leading-none">{sf.name}</p>
+                      <p className="text-[10px] text-gray-400 font-bold mt-0.5">
+                        {sfTotal} itens{sfChildren > 0 && ` · ${sfChildren} subpastas`}
+                      </p>
+                    </div>
+                    <ChevronRight size={13} className="text-gray-300 ml-0.5" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Aggregation toggle (only visible when there are subfolders) */}
+        {subfolders.length > 0 && (
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={() => setAggregated(v => !v)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                aggregated
+                  ? 'bg-brand-primary/10 text-brand-primary border-brand-primary/20'
+                  : 'bg-gray-50 text-gray-400 border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center transition-all ${
+                aggregated ? 'border-brand-primary bg-brand-primary' : 'border-gray-300'
+              }`}>
+                {aggregated && <span className="w-1.5 h-1.5 rounded-full bg-white block" />}
+              </span>
+              Incluir subpastas
+            </button>
+            <span className="text-xs text-gray-400">
+              {aggregated
+                ? 'Mostrando itens desta pasta e de todas as subpastas'
+                : 'Mostrando apenas itens diretos desta pasta'}
+            </span>
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div className="flex items-center gap-1 bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm overflow-x-auto shrink-0">
+          {TABS.map(({ key, label }) => {
+            const count    = folderItems[key].length;
+            const style    = TAB_STYLE[key];
+            const Icon     = style.icon;
+            const isActive = activeTab === key;
+            return (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                  isActive ? style.active : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <Icon size={14} />
+                <span>{label}</span>
+                {count > 0 && (
+                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${isActive ? style.pill : 'bg-gray-100 text-gray-400'}`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Content list */}
+        <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+          {tabItems.length === 0 ? (
+            <EmptyTab
+              tabKey={activeTab}
+              folderName={activeSubject.name}
+              onNavigate={() => onNavigate(TABS.find(t => t.key === activeTab)!.moduleTab, activeSubject.id)}
+            />
+          ) : (
+            <>
+              {tabItems.map((item: any) => (
+                <ContentRow
+                  key={item.id}
+                  tabKey={activeTab}
+                  item={item}
+                  onGo={() => onNavigate(TABS.find(t => t.key === activeTab)!.moduleTab, activeSubject.id)}
+                  onMove={() => setMovingItem({ type: activeTab, id: item.id })}
+                />
+              ))}
+              <div className="flex justify-end pt-1 pb-4">
+                <button
+                  onClick={() => onNavigate(TABS.find(t => t.key === activeTab)!.moduleTab, activeSubject.id)}
+                  className="text-xs font-bold text-gray-400 hover:text-brand-primary transition-colors flex items-center gap-1.5"
+                >
+                  Abrir módulo completo
+                  <ExternalLink size={12} />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -930,7 +981,8 @@ const EmptyTab = ({
       </div>
       <p className="text-sm font-bold text-gray-500 mb-1">Nenhum item vinculado</p>
       <p className="text-xs text-gray-400 mb-5 max-w-xs">
-        Nenhum item está vinculado à pasta "{folderName}". Abra o módulo e associe itens a esta pasta.
+        Nenhum item deste tipo está na pasta "{folderName}" (nem nas subpastas).
+        Abra o módulo e associe itens a esta pasta.
       </p>
       <button
         onClick={onNavigate}

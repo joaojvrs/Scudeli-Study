@@ -14,7 +14,10 @@ import {
   Zap,
   RotateCcw,
   History,
+  XCircle,
   Filter,
+  ImagePlus,
+  Loader2,
   BookOpen,
   Clock,
   FolderOpen
@@ -30,7 +33,7 @@ interface Props {
 }
 
 const Flashcards = ({ initialSubjectId }: Props) => {
-  const { flashcards, subjects, supabaseUser } = useAppContext();
+  const { flashcards, subjects, supabaseUser, refreshAllData } = useAppContext();
 
   // Navigation state
   const [view, setView] = useState<View>(initialSubjectId ? 'cards' : 'subjects');
@@ -43,6 +46,10 @@ const Flashcards = ({ initialSubjectId }: Props) => {
   const [back, setBack] = useState('');
   const [subjectId, setSubjectId] = useState('');
   const [formTags, setFormTags] = useState<string[]>([]);
+  const [imageFrontUrl, setImageFrontUrl] = useState<string | null>(null);
+  const [imageBackUrl, setImageBackUrl]   = useState<string | null>(null);
+  const [uploadingFront, setUploadingFront] = useState(false);
+  const [uploadingBack, setUploadingBack]   = useState(false);
 
   // Filter state
   const [searchTerm, setSearchTerm] = useState('');
@@ -128,6 +135,25 @@ const Flashcards = ({ initialSubjectId }: Props) => {
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 
+  const uploadFlashcardImage = async (file: File, side: 'front' | 'back') => {
+    if (!supabaseUser) return;
+    const setUploading = side === 'front' ? setUploadingFront : setUploadingBack;
+    const setUrl       = side === 'front' ? setImageFrontUrl  : setImageBackUrl;
+    setUploading(true);
+    try {
+      const ext  = file.name.split('.').pop() ?? 'jpg';
+      const path = `flashcard-images/${supabaseUser.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error } = await supabase.storage.from('materials').upload(path, file, { contentType: file.type, upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from('materials').getPublicUrl(path);
+      setUrl(data.publicUrl);
+    } catch (err) {
+      console.error('Erro ao fazer upload da imagem:', err);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleAddCard = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabaseUser || !front || !back || !subjectId) return;
@@ -142,12 +168,17 @@ const Flashcards = ({ initialSubjectId }: Props) => {
         easiness: 2.5,
         repetitions: 0,
         created_at: new Date().toISOString(),
-        tags: formTags
+        tags: formTags,
+        image_front: imageFrontUrl,
+        image_back: imageBackUrl,
       });
       setFront('');
       setBack('');
       setFormTags([]);
+      setImageFrontUrl(null);
+      setImageBackUrl(null);
       setIsAdding(false);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'flashcards');
     }
@@ -186,10 +217,13 @@ const Flashcards = ({ initialSubjectId }: Props) => {
     const nextReviewDate = new Date();
     nextReviewDate.setDate(nextReviewDate.getDate() + interval);
     try {
-      await supabase
-        .from('flashcards')
-        .update({ interval, easiness, repetitions, next_review: nextReviewDate.toISOString() })
-        .eq('id', card.id);
+      await supabase.from('flashcards').update({
+        interval,
+        easiness,
+        repetitions,
+        next_review: nextReviewDate.toISOString()
+      }).eq('id', card.id);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.UPDATE, `flashcards/${card.id}`);
     }
@@ -298,6 +332,12 @@ const Flashcards = ({ initialSubjectId }: Props) => {
                 <h3 className="text-3xl font-bold text-gray-900 leading-[1.4] max-w-md font-montserrat tracking-tight">
                   {showAnswer ? card.back : card.front}
                 </h3>
+                {!showAnswer && card.image_front && (
+                  <img src={card.image_front} alt="" className="max-w-xs max-h-48 rounded-2xl object-contain mt-6" />
+                )}
+                {showAnswer && card.image_back && (
+                  <img src={card.image_back} alt="" className="max-w-xs max-h-48 rounded-2xl object-contain mt-6" />
+                )}
                 <div className="absolute bottom-10 flex items-center space-x-2 text-gray-300 group-hover:text-brand-primary transition-colors">
                   <RotateCcw size={14} className="animate-spin-slow" />
                   <span className="text-[10px] font-bold uppercase tracking-widest">Toque para virar</span>
@@ -431,6 +471,24 @@ const Flashcards = ({ initialSubjectId }: Props) => {
                     className="w-full p-6 bg-gray-50 border-transparent rounded-[24px] text-sm font-medium focus:bg-white focus:border-brand-primary/20 outline-none min-h-[160px] transition-all border shadow-inner"
                     required
                   />
+                  {imageFrontUrl ? (
+                    <div className="relative w-fit">
+                      <img src={imageFrontUrl} alt="Frente" className="max-h-40 rounded-2xl object-cover border border-gray-100" />
+                      <button
+                        type="button"
+                        onClick={() => setImageFrontUrl(null)}
+                        className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                      >
+                        <XCircle size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-2xl text-xs font-bold text-gray-400 hover:bg-gray-100 transition-all border border-dashed border-gray-200">
+                      {uploadingFront ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                      {uploadingFront ? 'Enviando...' : 'Adicionar imagem'}
+                      <input type="file" accept="image/*" className="hidden" disabled={uploadingFront} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFlashcardImage(f, 'front'); e.target.value = ''; }} />
+                    </label>
+                  )}
                 </div>
                 <div className="space-y-3">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Verso (Definição)</label>
@@ -441,6 +499,24 @@ const Flashcards = ({ initialSubjectId }: Props) => {
                     className="w-full p-6 bg-gray-50 border-transparent rounded-[24px] text-sm font-medium focus:bg-white focus:border-brand-primary/20 outline-none min-h-[160px] transition-all border shadow-inner"
                     required
                   />
+                  {imageBackUrl ? (
+                    <div className="relative w-fit">
+                      <img src={imageBackUrl} alt="Verso" className="max-h-40 rounded-2xl object-cover border border-gray-100" />
+                      <button
+                        type="button"
+                        onClick={() => setImageBackUrl(null)}
+                        className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                      >
+                        <XCircle size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-2xl text-xs font-bold text-gray-400 hover:bg-gray-100 transition-all border border-dashed border-gray-200">
+                      {uploadingBack ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                      {uploadingBack ? 'Enviando...' : 'Adicionar imagem'}
+                      <input type="file" accept="image/*" className="hidden" disabled={uploadingBack} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFlashcardImage(f, 'back'); e.target.value = ''; }} />
+                    </label>
+                  )}
                 </div>
               </div>
               <div className="space-y-4">
@@ -465,12 +541,16 @@ const Flashcards = ({ initialSubjectId }: Props) => {
             >
               <div className="flex justify-end mb-4">
                 <button
-                  onClick={() => supabase.from('flashcards').delete().eq('id', card.id)}
+                  onClick={async () => { await supabase.from('flashcards').delete().eq('id', card.id); await refreshAllData(); }}
                   className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 shadow-sm"
                 >
                   <Trash2 size={14} />
                 </button>
               </div>
+
+              {card.image_front && (
+                <img src={card.image_front} alt="" className="w-full h-28 object-cover rounded-2xl mb-4" />
+              )}
 
               <p className="text-lg font-bold text-gray-900 leading-tight mb-8 flex-1 font-montserrat tracking-tight line-clamp-4">
                 {card.front}
@@ -527,7 +607,6 @@ const Flashcards = ({ initialSubjectId }: Props) => {
     const { total: aggTotal, due: aggDue, dueCards: aggDueCards } = getAggregated(activeParentId);
     const accent = parentSubject?.color ?? '#6b7280';
 
-    // Sections: parent's own cards + each child
     const allSections: Array<{ subject: Subject; own: boolean }> = [
       ...(cardsBySubject[activeParentId]?.length ? [{ subject: parentSubject!, own: true }] : []),
       ...children.map(c => ({ subject: c, own: false }))
@@ -570,9 +649,7 @@ const Flashcards = ({ initialSubjectId }: Props) => {
           </button>
         </header>
 
-        {/* Parent's own cards + children cards as tiles */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {/* Parent's own cards section (if any) */}
           {(cardsBySubject[activeParentId]?.length ?? 0) > 0 && (
             <SubjectTile
               subject={parentSubject!}
@@ -584,7 +661,6 @@ const Flashcards = ({ initialSubjectId }: Props) => {
             />
           )}
 
-          {/* Child subjects */}
           {children.map(child => {
             const total = cardsBySubject[child.id]?.length ?? 0;
             const due = dueBySubject[child.id] ?? 0;
@@ -663,7 +739,6 @@ const Flashcards = ({ initialSubjectId }: Props) => {
             const { total, due, dueCards: sbjDueCards } = getAggregated(subject.id);
             const accent = subject.color ?? '#6b7280';
 
-            // No cards anywhere in this subject tree — show as empty dashed tile
             if (total === 0) {
               return (
                 <motion.button
@@ -720,7 +795,6 @@ const Flashcards = ({ initialSubjectId }: Props) => {
                   {total} {total === 1 ? 'card' : 'cards'}
                 </p>
 
-                {/* Sub-areas preview chips */}
                 {hasChildren && (
                   <div className="flex flex-wrap gap-2 mb-6">
                     {children.slice(0, 3).map(c => (

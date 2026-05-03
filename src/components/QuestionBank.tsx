@@ -17,13 +17,12 @@ import {
   Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Question, Material, QuestionType, GlobalTag } from '../types';
-import { geminiService } from '../services/geminiService';
+import { Question, Material } from '../types';
 import SimulationMode from './SimulationMode';
 import TagPicker from './TagPicker';
 
 const QuestionBank = () => {
-  const { subjects, supabaseUser, user, tags: globalTags, questions, materials } = useAppContext();
+  const { subjects, supabaseUser, user, tags: globalTags, questions, materials, refreshAllData } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [activeView, setActiveView] = useState<'browse' | 'create' | 'simulation' | 'ai'>('browse');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
@@ -34,11 +33,11 @@ const QuestionBank = () => {
   // AI Prompt State
   const [aiSourceType, setAiSourceType] = useState<'theme' | 'document'>('theme');
   const [selectedMaterialId, setSelectedMaterialId] = useState('');
-  const [aiQuestionType, setAiQuestionType] = useState<QuestionType>(QuestionType.MULTIPLE_CHOICE);
   const [aiTheme, setAiTheme] = useState('');
   const [aiSubject, setAiSubject] = useState('');
   const [aiDifficulty, setAiDifficulty] = useState<'easy'|'medium'|'hard'>('medium');
-  const [aiCount, setAiCount] = useState(5);
+  const [aiMultipleChoiceCount, setAiMultipleChoiceCount] = useState(3);
+  const [aiDiscursiveCount, setAiDiscursiveCount] = useState(2);
 
   // Filters
   const [selectedSubject, setSelectedSubject] = useState('all');
@@ -77,6 +76,7 @@ const QuestionBank = () => {
       setOptions(['', '', '', '']);
       setExplanation('');
       setFormTags([]);
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.CREATE, 'questions');
     }
@@ -86,44 +86,62 @@ const QuestionBank = () => {
     if (!supabaseUser) return;
     if (aiSourceType === 'theme' && (!aiTheme || !aiSubject)) return;
     if (aiSourceType === 'document' && !selectedMaterialId) return;
+    if (aiMultipleChoiceCount + aiDiscursiveCount === 0) return;
 
     setIsAiGenerating(true);
-    
+
     try {
-      let aiQuestions: Partial<Question>[] = [];
-      let sourceTag = aiTheme;
       let targetSubjectId = aiSubject;
+      const payload: Record<string, unknown> = {
+        sourceType: aiSourceType,
+        multipleChoiceCount: aiMultipleChoiceCount,
+        discursiveCount: aiDiscursiveCount,
+        difficulty: aiDifficulty,
+      };
 
       if (aiSourceType === 'document') {
         const material = materials.find(m => m.id === selectedMaterialId);
-        if (!material) throw new Error("Material não encontrado");
-        
-        // Simulating reading document content (in a real app, you'd fetch the file content)
-        // Here we use the title and meta-info as a proxy or assume we have text extraction
-        const simulatedContent = `Documento: ${material.title}. Resumo prévio: ${material.summary || ''}. Tags: ${material.tags.join(', ')}`;
-        
-        aiQuestions = await geminiService.generateQuestionsFromContent(simulatedContent, aiQuestionType, aiDifficulty, aiCount);
-        sourceTag = material.title;
-        targetSubjectId = material.subject_id;
+        if (!material) throw new Error('Material não encontrado');
+        payload.documentUrl = material.url;
+        payload.documentTitle = material.title;
+        targetSubjectId = material.subject_id || '';
       } else {
-        const subjectName = subjects.find(s => s.id === aiSubject)?.name || 'Medicina';
-        aiQuestions = await geminiService.generateQuestions(subjectName, aiTheme, aiDifficulty, aiCount);
+        payload.subjectName = subjects.find(s => s.id === aiSubject)?.name || '';
+        payload.theme = aiTheme;
       }
-      
+
+      const response = await fetch('https://webhook.saveautomatik.shop/webhook/questoes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) throw new Error('Erro na resposta do webhook');
+
+      const aiQuestions: Partial<Question>[] = await response.json();
+
       for (const q of aiQuestions) {
         await supabase.from('questions').insert({
-          ...q,
-          user_id: supabaseUser.id,
-          subject_id: targetSubjectId,
+          text: q.text,
+          options: q.options ?? [],
+          answerIndex: q.answerIndex ?? -1,
+          explanation: q.explanation || '',
+          type: q.type,
           difficulty: aiDifficulty,
+          subject_id: targetSubjectId,
+          user_id: supabaseUser.id,
           created_at: new Date().toISOString(),
           source: 'ai',
           material_id: aiSourceType === 'document' ? selectedMaterialId : null,
-          tags: ['ia-generated', aiSourceType, sourceTag.toLowerCase(), ...sourceTag.split(' ').map(t => t.toLowerCase()).filter(t => t.length > 3)]
+          tags: aiSourceType === 'theme'
+            ? ['ia-generated', aiTheme.toLowerCase()]
+            : ['ia-generated', 'documento'],
         });
       }
+
       setIsAiGenerating(false);
       setAiTheme('');
+      await refreshAllData();
       alert(`${aiQuestions.length} questões geradas com sucesso!`);
     } catch (e) {
       console.error(e);
@@ -177,6 +195,7 @@ const QuestionBank = () => {
           created_at: new Date().toISOString(),
           tags: ['erro-automatizado', ...question.tags]
         });
+        await refreshAllData();
       } catch (err) {
         console.error("Erro ao processar erro de questão:", err);
       }
@@ -339,21 +358,8 @@ const QuestionBank = () => {
               )}
 
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Tipo de Questão</label>
-                <select 
-                  value={aiQuestionType}
-                  onChange={(e) => setAiQuestionType(e.target.value as any)}
-                  className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
-                >
-                  <option value={QuestionType.MULTIPLE_CHOICE}>Múltipla Escolha</option>
-                  <option value={QuestionType.TRUE_FALSE}>Verdadeiro ou Falso</option>
-                  <option value={QuestionType.OPEN_ENDED}>Discursiva (Aberta)</option>
-                </select>
-              </div>
-
-              <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Dificuldade</label>
-                <select 
+                <select
                   value={aiDifficulty}
                   onChange={(e) => setAiDifficulty(e.target.value as any)}
                   className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
@@ -363,14 +369,27 @@ const QuestionBank = () => {
                   <option value="hard">Difícil</option>
                 </select>
               </div>
+
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Quantidade</label>
-                <input 
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Múltipla Escolha</label>
+                <input
                   type="number"
-                  min="1"
+                  min="0"
                   max="10"
-                  value={aiCount}
-                  onChange={(e) => setAiCount(parseInt(e.target.value))}
+                  value={aiMultipleChoiceCount}
+                  onChange={(e) => setAiMultipleChoiceCount(parseInt(e.target.value) || 0)}
+                  className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Discursivas</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  value={aiDiscursiveCount}
+                  onChange={(e) => setAiDiscursiveCount(parseInt(e.target.value) || 0)}
                   className="w-full p-4 bg-white rounded-2xl border border-gray-100 outline-none focus:border-brand-secondary transition-all"
                 />
               </div>
@@ -379,7 +398,7 @@ const QuestionBank = () => {
             <div className="flex justify-end pt-4">
               <button
                 onClick={handleGenerateAiQuestions}
-                disabled={loading || (aiSourceType === 'theme' ? !aiTheme || !aiSubject : !selectedMaterialId)}
+                disabled={isAiGenerating || aiMultipleChoiceCount + aiDiscursiveCount === 0 || (aiSourceType === 'theme' ? !aiTheme || !aiSubject : !selectedMaterialId)}
                 className="bg-brand-secondary text-white px-10 py-4 rounded-2xl font-bold flex items-center space-x-2 hover:bg-brand-secondary/90 transition-all shadow-lg shadow-brand-secondary/20 disabled:opacity-50"
               >
                 {loading || isAiGenerating ? <Loader2 className="animate-spin" size={20} /> : <Zap size={20} />}

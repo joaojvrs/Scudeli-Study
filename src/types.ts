@@ -76,6 +76,8 @@ export interface Flashcard {
   easiness: number;
   repetitions: number;
   tags: string[];
+  image_front?: string | null;
+  image_back?: string | null;
 }
 
 export interface Note {

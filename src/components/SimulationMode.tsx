@@ -18,7 +18,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 const SimulationMode = ({ onExit }: { onExit: () => void }) => {
-  const { supabaseUser, subjects } = useAppContext();
+  const { supabaseUser, subjects, refreshAllData } = useAppContext();
   const [step, setStep] = useState<'config' | 'exam' | 'result'>('config');
   
   // Config State
@@ -118,6 +118,7 @@ const SimulationMode = ({ onExit }: { onExit: () => void }) => {
       });
 
       setStep('result');
+      await refreshAllData();
     } catch (err) {
       handleSupabaseError(err, OperationType.WRITE, 'simulations');
     } finally {

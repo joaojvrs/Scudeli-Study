@@ -20,7 +20,7 @@ import { StudyPlan } from '../types';
 import { geminiService } from '../services/geminiService';
 
 const StudyPlanner = () => {
-  const { supabaseUser, subjects, tasks, studyPlans: plans } = useAppContext();
+  const { supabaseUser, subjects, tasks, studyPlans: plans, refreshAllData } = useAppContext();
   const [isGenerating, setIsGenerating] = useState(false);
   const [formData, setFormData] = useState({
     name: 'Simulado Residência 2024',
@@ -59,11 +59,11 @@ const StudyPlanner = () => {
       };
 
       if (activePlan) {
-        await supabase.from('studyPlans').update(planData).eq('id', activePlan.id);
+        await supabase.from('study_plans').update(planData).eq('id', activePlan.id);
       } else {
-        await supabase.from('studyPlans').insert(planData);
+        await supabase.from('study_plans').insert(planData);
       }
-      
+      await refreshAllData();
       alert('Plano de estudo gerado com sucesso pela IA!');
     } catch (e) {
       console.error(e);
